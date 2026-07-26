@@ -71,7 +71,23 @@ async function startLogin({ account, password, onCaptchaReady }) {
 
     await page.goto(HOME_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-    // 1. 切到「會員登入」分頁(section-2),等表單顯示
+    // 1. 開登入彈窗:整個登入區在 <div class="popup is_hide" id="_login"> 內(預設隱藏),
+    //    要先點首頁登入入口才顯示(E1-d 活測:不開彈窗則分頁連結與欄位皆 not visible)。
+    //    先試點真實入口(較忠於使用者流程、會跑到頁面自己的初始化);點不到再直接拆 is_hide 保險。
+    const opener = 'a[href*="_login"], a[onclick*="_login"], .js_login, a.login, header a:has-text("登入")';
+    await page.click(opener, { timeout: 5000 }).catch(() => {});
+    const loginVisible = async () => {
+      try { return await page.locator('#_login').first().isVisible(); } catch (e) { return false; }
+    };
+    if (!(await loginVisible())) {
+      // fallback:直接移除 is_hide（該彈窗的顯示只靠此 class 切換）
+      await page.evaluate(() => {
+        const el = document.querySelector('#_login');
+        if (el) { el.classList.remove('is_hide'); el.style.display = 'block'; }
+      }).catch(() => {});
+    }
+
+    // 2. 切到「會員登入」分頁(section-2),等表單顯示
     await page.click('._login_tab a[href="#section-2"]', { timeout: 15000 });
     await page.waitForSelector('#smart-account-login-account', { state: 'visible', timeout: 15000 });
 
