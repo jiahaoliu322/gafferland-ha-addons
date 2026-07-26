@@ -1,10 +1,11 @@
 // ── etag-relay HA add-on 主服務 ─────────────────────────────────────────
 // Node 內建 http server(不用 express,add-on 體積/攻擊面最小化)。
-// 路由見計劃 Round E「HA 中繼服務 etag-relay」節:
+// 路由見計劃 Round E「HA 中繼服務 etag-relay」節、Round F「雙軌登入」節:
 //   POST /query   (驗 X-Relay-Secret)  三步查詢鏈 → 回 transactions/total/printHtml
 //   GET  /health  (驗 X-Relay-Secret)  存活 + session 有效性
-//   POST /session (內部用)             登入流程寫回 session cookie
-//   POST /captcha (驗 callback secret) Vercel line-webhook 轉發老闆回的 4 碼
+//   POST /login   (驗 X-Relay-Secret)  手動觸發登入流程(不必等 cron/keep-alive 撞失效)
+//   POST /session (內部用)             登入流程寫回 session cookie(貼 cookie 終極備援)
+//   POST /captcha (驗 callback secret) Vercel line-webhook 轉發老闆回的 4 碼(軌道 A 用)
 //   GET  /cap/{token}.png (不驗 secret,Access 例外) 供 LINE 抓 pending 登入的驗證碼圖
 //
 // 帳密/cookie 絕不寫入任何 log 或回應(沿用 gafferland-main sanitize 鐵則)。
@@ -30,6 +31,9 @@ try {
     VERCEL_CAPTCHA_URL: process.env.VERCEL_CAPTCHA_URL || '',
     VERCEL_CALLBACK_SECRET: process.env.VERCEL_CALLBACK_SECRET || '',
     PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL || '',
+    VNC_PASSWORD: process.env.VNC_PASSWORD || '',
+    VNC_PUBLIC_URL: process.env.VNC_PUBLIC_URL || '',
+    MANUAL_LOGIN_TTL_MIN: process.env.MANUAL_LOGIN_TTL_MIN || 15,
   };
 }
 
@@ -146,24 +150,36 @@ function requireEitherSecret(req, res, expectedList) {
 // timer 與查詢請求可能同時偵測到失效)重複開瀏覽器,不是重試邏輯。
 let loginInFlight = null;
 
-// 通知 Vercel「驗證碼圖好了」:POST VERCEL_CAPTCHA_URL {loginId, imageUrl, secret}。
+// 通知 Vercel 登入進度:POST VERCEL_CAPTCHA_URL {...payload, secret}。
 // secret 用 VERCEL_CALLBACK_SECRET(與 handleCaptcha 驗證同一把,呼應計劃「Vercel→relay 用既有
 // ETAG_RELAY_SECRET、relay→Vercel 用 ETAG_RELAY_CALLBACK_SECRET」的契約——中繼這端只認得自己
 // config.yaml 裡的 VERCEL_CALLBACK_SECRET 選項名稱,對外呼叫時帶的欄位值即 Vercel 端的
 // ETAG_RELAY_CALLBACK_SECRET)。
-async function notifyVercelCaptchaReady(token, loginId) {
+// payload.mode 為 'auto'(附 token,由這裡組 imageUrl)|'manual'|'manual-timeout'|'success'——
+// 只有 auto 才組 imageUrl,其餘 mode 不把 token 帶出去(token 只對「4 碼圖」這件事有意義)。
+// 通知失敗只印警告、不可 throw——軌道 B(真人遠端登入)特別重要:Vercel 通知不到,老闆還是要
+// 能靠其他管道(如直接看 noVNC)登入,不能讓登入流程因為通知失敗而 reject。
+async function notifyVercel(payload) {
   if (!options.VERCEL_CAPTCHA_URL) {
-    console.warn('[etag-relay] VERCEL_CAPTCHA_URL 未設定,無法通知 Vercel captcha 就緒');
+    console.warn(`[etag-relay] VERCEL_CAPTCHA_URL 未設定,無法通知 Vercel(mode=${payload && payload.mode})`);
     return;
   }
-  const imageUrl = `${options.PUBLIC_BASE_URL || ''}/cap/${token}.png`;
-  const resp = await fetch(options.VERCEL_CAPTCHA_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ loginId, imageUrl, secret: options.VERCEL_CALLBACK_SECRET }),
-  });
-  if (!resp.ok) {
-    throw new Error(`vercel-captcha-notify-failed:${resp.status}`);
+  const body = { ...payload, secret: options.VERCEL_CALLBACK_SECRET };
+  if (body.mode === 'auto' && body.token) {
+    body.imageUrl = `${options.PUBLIC_BASE_URL || ''}/cap/${body.token}.png`;
+    delete body.token; // 只留 imageUrl,token 本身不必洩給 Vercel
+  }
+  try {
+    const resp = await fetch(options.VERCEL_CAPTCHA_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      console.warn(`[etag-relay] 通知 Vercel 失敗(mode=${payload && payload.mode}):HTTP ${resp.status}`);
+    }
+  } catch (e) {
+    console.warn(`[etag-relay] 通知 Vercel 例外(mode=${payload && payload.mode}):`, e && e.message);
   }
 }
 
@@ -184,14 +200,18 @@ function triggerLogin(reason) {
   loginInFlight = startLogin({
     account: options.FETC_ACCOUNT,
     password: options.FETC_PASSWORD,
-    onCaptchaReady: notifyVercelCaptchaReady,
+    profileDir: path.join(DATA_DIR, 'chrome-profile'),
+    vncUrl: options.VNC_PUBLIC_URL,
+    manualTtlMs: (Number(options.MANUAL_LOGIN_TTL_MIN) || 15) * 60 * 1000,
+    onNotify: notifyVercel,
   })
-    .then(({ cookies }) => {
+    .then(({ cookies, via, loginId }) => {
       const asObj = Object.fromEntries((cookies || []).map((c) => [c.name, c.value]));
       jar = new CookieJar(asObj);
       sessionMeta.lastKeepAlive = Date.now();
       saveSession();
-      console.log('[etag-relay] 登入流程成功,session 已存檔');
+      console.log(`[etag-relay] 登入流程成功,session 已存檔(via=${via})`);
+      notifyVercel({ mode: 'success', loginId, via });
     })
     .catch((e) => {
       // e.message 只可能含 URL/HTTP status/逾時等網路層資訊(lib/login.js 沿用 sanitize 鐵則),
@@ -278,7 +298,18 @@ async function handleHealth(req, res) {
     ok: true,
     sessionValid,
     lastKeepAlive: sessionMeta.lastKeepAlive,
+    loginInFlight: !!loginInFlight,
+    vncEnabled: !!options.VNC_PASSWORD, // 只回有無設定,密碼值絕不外流
+    hasProfile: fs.existsSync(path.join(DATA_DIR, 'chrome-profile')),
   });
+}
+
+// 讓 /collect 有「重新登入遠通」按鈕,不必等 cron/keep-alive 撞失效才觸發。
+// fire-and-forget(同 triggerLogin 既有語意):回應只回「有沒有啟動」,不等登入流程跑完。
+async function handleLogin(req, res) {
+  if (!requireSecret(req, res, options.RELAY_SECRET)) return;
+  const p = triggerLogin('manual-request');
+  return sendJson(res, 200, { ok: true, started: !!p, inFlight: !!loginInFlight });
 }
 
 // 內部用:登入流程(lib/login.js)取得新 session 後寫回。不對外(Cloudflare
@@ -347,6 +378,7 @@ const server = http.createServer((req, res) => {
     .then(() => {
       if (req.method === 'POST' && url.pathname === '/query') return handleQuery(req, res);
       if (req.method === 'GET' && url.pathname === '/health') return handleHealth(req, res);
+      if (req.method === 'POST' && url.pathname === '/login') return handleLogin(req, res);
       if (req.method === 'POST' && url.pathname === '/session') return handleSession(req, res);
       if (req.method === 'POST' && url.pathname === '/captcha') return handleCaptcha(req, res);
       if (req.method === 'GET' && capMatch) return handleCapImage(req, res, capMatch[1]);

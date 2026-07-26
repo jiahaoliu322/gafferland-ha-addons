@@ -1,8 +1,12 @@
 // ── 遠通(FETC)登入流程(playwright)──────────────────────────────────
 // 2026-07-27 E1-d 活測校正:依真實登入頁 DOM 重寫(首頁 #section-2 會員登入分頁)。
+// 2026-07-27 Round F:reCAPTCHA v3 靠自動化瀏覽器分數過不了(4 碼驗證碼本身早就是對的),
+// 改雙軌:①持久 profile + 真 Google Chrome 提高 v3 分數,自動登入仍先試一次;②失敗(或
+// 逾時沒收到 4 碼)→ 不關瀏覽器,轉真人透過 noVNC 遠端手動登入,session 直接生在中繼。
 //
 // 職責分離(機制③):HA 只持 FETC_ACCOUNT/FETC_PASSWORD(add-on secret);老闆的
-// LINE 金鑰只在 Vercel。此模組只管「開瀏覽器登入、截驗證碼、等 4 碼餵回、拿 session」。
+// LINE 金鑰只在 Vercel。此模組只管「開瀏覽器登入、截驗證碼、等 4 碼餵回/等真人手動登入、
+// 拿 session」。
 //
 // 登入頁真實結構(E1-d dump)：https://www.fetc.net.tw/ 首頁內含登入區,分頁 `._login_tab`：
 //   #section-1 車號登入(sForm1) / #section-2 會員登入(sForm2,預設隱藏,要點分頁才顯示)
@@ -20,7 +24,11 @@
 const crypto = require('crypto');
 
 const HOME_URL = 'https://www.fetc.net.tw/';
+// CAPTCHA_TTL_MS:只管「軌道 A 等老闆回 4 碼」的視窗(逾時視同軌道 A 失敗 → 轉軌道 B)。
+// 軌道 B(真人遠端登入)的等待時間是另一個計時器 manualTtlMs(由 server.js 傳入),兩者不可
+// 混用——manualTtlMs 通常比 CAPTCHA_TTL_MS 長(給老闆走到 noVNC、輸密碼的時間)。
 const CAPTCHA_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_MANUAL_TTL_MS = 15 * 60 * 1000;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 const pending = new Map();
@@ -67,19 +75,68 @@ async function waitLoginSuccess(page, context, ctx, timeoutMs) {
   return { ok: false, detail: detail || '(無可用診斷資訊)' };
 }
 
-// 啟動一次登入流程。回 Promise<{cookies}>,失敗 reject。
-// onCaptchaReady(token, loginId):通知 Vercel 圖好了(server.js 提供)。
-async function startLogin({ account, password, onCaptchaReady }) {
+// 開登入彈窗、切到會員登入分頁、填帳密——軌道 A/B 共用的前置動作,抽成函式避免重複。
+async function openLoginForm(page, account, password) {
+  // 1. 開登入彈窗:整個登入區在 <div class="popup is_hide" id="_login"> 內(預設隱藏),
+  //    要先點首頁登入入口才顯示(E1-d 活測:不開彈窗則分頁連結與欄位皆 not visible)。
+  //    先試點真實入口(較忠於使用者流程、會跑到頁面自己的初始化);點不到再直接拆 is_hide 保險。
+  const opener = 'a[href*="_login"], a[onclick*="_login"], .js_login, a.login, header a:has-text("登入")';
+  await page.click(opener, { timeout: 5000 }).catch(() => {});
+  const loginVisible = async () => {
+    try { return await page.locator('#_login').first().isVisible(); } catch (e) { return false; }
+  };
+  if (!(await loginVisible())) {
+    // fallback:直接移除 is_hide（該彈窗的顯示只靠此 class 切換）
+    await page.evaluate(() => {
+      const el = document.querySelector('#_login');
+      if (el) { el.classList.remove('is_hide'); el.style.display = 'block'; }
+    }).catch(() => {});
+  }
+
+  // 2. 切到「會員登入」分頁(section-2),等表單顯示
+  await page.click('._login_tab a[href="#section-2"]', { timeout: 15000 });
+  await page.waitForSelector('#smart-account-login-account', { state: 'visible', timeout: 15000 });
+
+  // 3. 填帳密
+  // 逐字輸入(帶延遲)＋滑鼠移動:v3 也看互動行為,fill() 瞬間灌值是機器人特徵
+  await page.mouse.move(700, 400);
+  await page.click('#smart-account-login-account');
+  await page.type('#smart-account-login-account', account, { delay: 90 });
+  await page.click('#smartIDLogin_smartPassword');
+  await page.type('#smartIDLogin_smartPassword', password, { delay: 90 });
+}
+
+// 等驗證碼圖載入(vcodeImage src 由 JS 帶入);沒載到就點刷新再等。回截圖 buffer(可能 null)。
+async function captureCaptchaImage(page) {
+  const imgSel = '#section-2 .vcodeImage';
+  const imgLoaded = (sel) => {
+    const img = document.querySelector(sel);
+    return !!(img && img.complete && img.naturalWidth > 0);
+  };
+  try {
+    await page.waitForFunction(imgLoaded, imgSel, { timeout: 8000 });
+  } catch (e) {
+    await page.click('#section-2 a.refresh').catch(() => {});
+    await page.waitForFunction(imgLoaded, imgSel, { timeout: 8000 }).catch(() => {});
+  }
+  const captchaEl = await page.$(imgSel);
+  return captchaEl ? await captchaEl.screenshot() : null;
+}
+
+// 啟動一次登入流程。回 Promise<{cookies, via, loginId}>(via: 'profile'|'auto'|'manual'),失敗 reject。
+// - profileDir:持久 chrome profile 路徑(累積 cookie/瀏覽歷史,v3 分數的核心槓桿,也讓
+//   遠通登入態有機會跨重啟存活)。
+// - vncUrl/manualTtlMs:軌道 B(真人遠端登入)用——onNotify(mode:'manual') 帶給 Vercel。
+// - onNotify(payload):單一物件參數,payload.mode 為 'auto'|'manual'|'manual-timeout'
+//   (mode:'success' 由呼叫端 server.js 在 Promise resolve 之後自行發,不在這裡)。
+async function startLogin({ account, password, profileDir, vncUrl, manualTtlMs, onNotify }) {
   const { chromium } = require('playwright');
 
   const loginId = crypto.randomUUID();
   const token = newToken();
+  const ttlMs = manualTtlMs || DEFAULT_MANUAL_TTL_MS;
 
-  // headless:false ＋ xvfb 虛擬螢幕(Dockerfile CMD 用 xvfb-run 包住整個 process)——
-  // 2026-07-27 E1-d 實測:headless 模式下遠通回 {"isSucceed":false,"errorMessage":"驗證失敗,
-  // 請重新整理頁面後再試"} ＝ reCAPTCHA v3 判定為機器人(4 碼驗證碼本身是對的)。
-  // v3 主要看瀏覽器指紋/行為,headless 是最大扣分項;改跑真實 Chrome on xvfb 提高分數。
-  const browser = await chromium.launch({
+  const launchOpts = {
     headless: false,
     args: [
       '--no-sandbox',
@@ -87,21 +144,35 @@ async function startLogin({ account, password, onCaptchaReady }) {
       '--disable-blink-features=AutomationControlled',
       '--window-size=1440,900',
     ],
-  });
+    locale: 'zh-TW',
+    timezoneId: 'Asia/Taipei',
+    viewport: { width: 1440, height: 900 },
+    userAgent: UA,
+  };
+
+  // 持久 profile ＋ 真 Chrome:headless:false ＋ xvfb 虛擬螢幕(run.sh 起 :99)——
+  // 2026-07-27 E1-d 實測:headless 模式下遠通回 {"isSucceed":false,"errorMessage":"驗證失敗,
+  // 請重新整理頁面後再試"} ＝ reCAPTCHA v3 判定為機器人(4 碼驗證碼本身是對的)。
+  // Round F:改用 channel:'chrome'(真 Google Chrome,非 bundled Chromium)進一步拉高 v3 分數;
+  // 若 Dockerfile 內 Chrome 安裝失敗(build 不因此掛掉,見 Dockerfile 註解),這裡 catch 後
+  // 不帶 channel 重試一次,fallback 回 base image 內建的 chromium——不可讓中繼因此整個掛掉。
+  let context;
   try {
-    const context = await browser.newContext({
-      locale: 'zh-TW',
-      timezoneId: 'Asia/Taipei',
-      viewport: { width: 1440, height: 900 },
-      userAgent: UA,
-    });
-    // 抹掉 navigator.webdriver 等自動化指紋(v3 會讀)
+    context = await chromium.launchPersistentContext(profileDir, { ...launchOpts, channel: 'chrome' });
+  } catch (e) {
+    console.warn('[login] Chrome 不可用,fallback chromium:', e && e.message);
+    context = await chromium.launchPersistentContext(profileDir, launchOpts);
+  }
+
+  try {
+    // 抹掉 navigator.webdriver 等自動化指紋(v3 會讀)——persistent context 也支援 addInitScript。
     await context.addInitScript(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
       Object.defineProperty(navigator, 'languages', { get: () => ['zh-TW', 'zh', 'en'] });
       Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
     });
-    const page = await context.newPage();
+    // persistent context 沒有獨立的 browser 物件,page 用既有分頁或開新的。
+    const page = context.pages()[0] || (await context.newPage());
 
     // 攔截登入 AJAX 回應(SmartIDLogin),供成功判定與失敗診斷用(只留內容片段,不含帳密)
     const ctx = { loginResponse: null };
@@ -116,57 +187,64 @@ async function startLogin({ account, password, onCaptchaReady }) {
 
     await page.goto(HOME_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-    // 1. 開登入彈窗:整個登入區在 <div class="popup is_hide" id="_login"> 內(預設隱藏),
-    //    要先點首頁登入入口才顯示(E1-d 活測:不開彈窗則分頁連結與欄位皆 not visible)。
-    //    先試點真實入口(較忠於使用者流程、會跑到頁面自己的初始化);點不到再直接拆 is_hide 保險。
-    const opener = 'a[href*="_login"], a[onclick*="_login"], .js_login, a.login, header a:has-text("登入")';
-    await page.click(opener, { timeout: 5000 }).catch(() => {});
-    const loginVisible = async () => {
-      try { return await page.locator('#_login').first().isVisible(); } catch (e) { return false; }
-    };
-    if (!(await loginVisible())) {
-      // fallback:直接移除 is_hide（該彈窗的顯示只靠此 class 切換）
-      await page.evaluate(() => {
-        const el = document.querySelector('#_login');
-        if (el) { el.classList.remove('is_hide'); el.style.display = 'block'; }
-      }).catch(() => {});
+    // 持久 profile 的最大紅利:重啟後 FETC_P 可能還在(遠通登入態存活)→ 完全不需要重新登入。
+    const existingCookies = await context.cookies();
+    if (existingCookies.some((c) => c.name === 'FETC_P' && c.value)) {
+      console.log(`[login] profile 已登入,略過登入流程(via=profile,loginId=${loginId})`);
+      await context.close().catch(() => {});
+      return { cookies: existingCookies, via: 'profile', loginId };
     }
 
-    // 2. 切到「會員登入」分頁(section-2),等表單顯示
-    await page.click('._login_tab a[href="#section-2"]', { timeout: 15000 });
-    await page.waitForSelector('#smart-account-login-account', { state: 'visible', timeout: 15000 });
-
-    // 2. 填帳密
-    // 逐字輸入(帶延遲)＋滑鼠移動:v3 也看互動行為,fill() 瞬間灌值是機器人特徵
-    await page.mouse.move(700, 400);
-    await page.click('#smart-account-login-account');
-    await page.type('#smart-account-login-account', account, { delay: 90 });
-    await page.click('#smartIDLogin_smartPassword');
-    await page.type('#smartIDLogin_smartPassword', password, { delay: 90 });
-
-    // 3. 等驗證碼圖載入(vcodeImage src 由 JS 帶入);沒載到就點刷新再等
-    const imgSel = '#section-2 .vcodeImage';
-    const imgLoaded = (sel) => {
-      const img = document.querySelector(sel);
-      return !!(img && img.complete && img.naturalWidth > 0);
-    };
-    try {
-      await page.waitForFunction(imgLoaded, imgSel, { timeout: 8000 });
-    } catch (e) {
-      await page.click('#section-2 a.refresh').catch(() => {});
-      await page.waitForFunction(imgLoaded, imgSel, { timeout: 8000 }).catch(() => {});
-    }
-    const captchaEl = await page.$(imgSel);
-    const imageBuffer = captchaEl ? await captchaEl.screenshot() : null;
+    await openLoginForm(page, account, password);
+    const imageBuffer = await captureCaptchaImage(page);
 
     return await new Promise((resolve, reject) => {
       let settled = false;
+      let captchaTimer = null;
       const finish = async (fn, arg) => {
         if (settled) return;
         settled = true;
         pending.delete(token);
-        await browser.close().catch(() => {});
+        if (captchaTimer) clearTimeout(captchaTimer);
+        await context.close().catch(() => {});
         fn(arg);
+      };
+
+      // 軌道 B(真人):不關瀏覽器——換一張新驗證碼(帳密留在欄位裡,讓老闆在 noVNC 看到的
+      // 是張有效的圖)、通知 Vercel、輪詢 FETC_P cookie 最多 ttlMs。
+      const toManual = async () => {
+        if (settled) return;
+        pending.delete(token); // 換軌:舊 4 碼圖即刻失效,不可再被提交(避免與軌道 A 競態)
+        try {
+          await page.click('#section-2 a.refresh').catch(() => {});
+          if (onNotify) {
+            await Promise.resolve(
+              onNotify({ mode: 'manual', loginId, vncUrl, ttlMin: Math.round(ttlMs / 60000) })
+            ).catch((e) => console.warn('[login] onNotify(manual) 失敗:', e && e.message));
+          }
+          const manualStart = Date.now();
+          while (!settled && Date.now() - manualStart < ttlMs) {
+            try {
+              const cookies = await context.cookies();
+              if (cookies.some((c) => c.name === 'FETC_P' && c.value)) {
+                console.log(`[login] 軌道 B(真人)登入成功(loginId=${loginId})`);
+                return finish(resolve, { cookies, via: 'manual', loginId });
+              }
+            } catch (e) { /* 輪詢中讀 cookie 短暫失敗,續輪詢 */ }
+            await page.waitForTimeout(2000);
+          }
+          if (!settled) {
+            console.warn(`[login] 軌道 B(真人)逾時未登入(loginId=${loginId})`);
+            if (onNotify) {
+              await Promise.resolve(onNotify({ mode: 'manual-timeout', loginId })).catch((e) =>
+                console.warn('[login] onNotify(manual-timeout) 失敗:', e && e.message)
+              );
+            }
+            return finish(reject, new Error('manual-login-timeout'));
+          }
+        } catch (e) {
+          return finish(reject, e);
+        }
       };
 
       pending.set(token, {
@@ -174,31 +252,45 @@ async function startLogin({ account, password, onCaptchaReady }) {
         createdAt: Date.now(),
         loginId,
         resolve: async (code) => {
+          pending.delete(token); // 一次性:提交後不管成敗都不可再被同一張圖提交第二次
           try {
             await page.click('#smartIDLogin_validateCode');
             await page.type('#smartIDLogin_validateCode', code, { delay: 120 });
-            // 4. 頁面原生送出(grecaptcha v3 + AJAX);點含 sForm2 的送出連結
+            // 頁面原生送出(grecaptcha v3 + AJAX);點含 sForm2 的送出連結
             await page.click("a[onclick*=\"'sForm2'\"]");
-            // 5. 成功偵測(AJAX 式登入,45s——含 grecaptcha 執行與遠通回應時間)
+            // 成功偵測(AJAX 式登入,45s——含 grecaptcha 執行與遠通回應時間)
             const res = await waitLoginSuccess(page, context, ctx, 45000);
-            if (!res.ok) return finish(reject, new Error('login-failed: ' + res.detail));
-            const cookies = await context.cookies();
-            return finish(resolve, { cookies });
+            if (res.ok) {
+              const cookies = await context.cookies();
+              console.log(`[login] 軌道 A(自動)登入成功(loginId=${loginId})`);
+              return finish(resolve, { cookies, via: 'auto', loginId });
+            }
+            // 「失敗不重試登入」鐵則不變(遠通有鎖帳號風險)——轉軌道 B,不是再送一次帳密。
+            console.warn(`[login] 軌道 A 失敗(${res.detail}),轉軌道 B(真人,loginId=${loginId})`);
+            return await toManual();
           } catch (e) {
-            return finish(reject, e);
+            console.warn('[login] 軌道 A 送出流程例外,轉軌道 B(真人):', e && e.message);
+            return await toManual();
           }
         },
         reject: (e) => finish(reject, e),
       });
 
-      if (onCaptchaReady) {
-        Promise.resolve(onCaptchaReady(token, loginId)).catch((e) => finish(reject, e));
+      if (onNotify) {
+        Promise.resolve(onNotify({ mode: 'auto', loginId, token })).catch((e) => finish(reject, e));
       }
 
-      setTimeout(() => { if (!settled) finish(reject, new Error('captcha-timeout')); }, CAPTCHA_TTL_MS);
+      // 軌道 A 逾時仍沒收到 4 碼(老闆沒回 LINE)→ 視同軌道 A 失敗,轉軌道 B。
+      // 這是「等 4 碼」的計時器,與軌道 B 的 ttlMs 是兩個獨立計時器,互不干擾。
+      captchaTimer = setTimeout(() => {
+        if (!settled && pending.has(token)) {
+          console.warn(`[login] 軌道 A 逾時未收到驗證碼,轉軌道 B(真人,loginId=${loginId})`);
+          toManual();
+        }
+      }, CAPTCHA_TTL_MS);
     });
   } catch (e) {
-    await browser.close().catch(() => {});
+    await context.close().catch(() => {});
     throw e;
   }
 }

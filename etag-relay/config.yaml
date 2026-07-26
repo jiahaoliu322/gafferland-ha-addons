@@ -1,5 +1,5 @@
 name: "eTag Relay"
-version: "0.1.6"
+version: "0.2.0"
 slug: "etag_relay"
 description: "遠通(FETC)eTag 通行明細中繼服務,供 Gafferland Vercel cron-etag 呼叫(台灣住宅 IP 出口)"
 arch:
@@ -7,8 +7,10 @@ arch:
 init: false
 ports:
   8099/tcp: 8099
+  8098/tcp: 8098
 ports_description:
   8099/tcp: "etag-relay HTTP API(建議只透過 Cloudflare Tunnel 對外,不直接開防火牆)"
+  8098/tcp: "noVNC 遠端登入畫面(Round F;僅設 VNC_PASSWORD 才啟動,務必只透過 Cloudflare Tunnel 對外)"
 map:
   - data:rw
 options:
@@ -18,6 +20,9 @@ options:
   VERCEL_CAPTCHA_URL: ""
   VERCEL_CALLBACK_SECRET: ""
   PUBLIC_BASE_URL: ""
+  VNC_PASSWORD: ""
+  VNC_PUBLIC_URL: ""
+  MANUAL_LOGIN_TTL_MIN: 15
 schema:
   FETC_ACCOUNT: str
   FETC_PASSWORD: password
@@ -25,3 +30,6 @@ schema:
   VERCEL_CAPTCHA_URL: str
   VERCEL_CALLBACK_SECRET: password
   PUBLIC_BASE_URL: str
+  VNC_PASSWORD: password?
+  VNC_PUBLIC_URL: str?
+  MANUAL_LOGIN_TTL_MIN: int?

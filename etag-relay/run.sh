@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# etag-relay 啟動腳本:先起 Xvfb 虛擬螢幕(headed Chrome 過 reCAPTCHA v3 用),再跑 server。
+# etag-relay 啟動腳本:先起 Xvfb 虛擬螢幕(headed Chrome 過 reCAPTCHA v3 用),
+# 再視 VNC_PASSWORD 是否設定起 x11vnc+websockify(Round F 真人遠端登入用),最後跑 server。
+#
+# 鐵則:任何一支(Xvfb/x11vnc/websockify)起不來都只印警告、絕不讓 server 不啟動——
+# 0.1.5 就是因為包裝腳本(xvfb-run)不存在導致容器無聲卡死,不能再犯。
 set -u
 export DISPLAY=:99
 echo "[etag-relay] 啟動 Xvfb on ${DISPLAY}"
@@ -10,5 +14,37 @@ for i in $(seq 1 20); do
   if xdpyinfo -display "${DISPLAY}" >/dev/null 2>&1; then echo "[etag-relay] Xvfb 就緒"; break; fi
   sleep 0.5
 done
-trap 'kill ${XVFB_PID} 2>/dev/null || true' EXIT
+
+# VNC_PASSWORD 讀法不用 jq(不保證 base image 有裝),用 node 讀 /data/options.json 較保險。
+# 讀失敗(non-HA 開發環境/檔案不存在)一律當空字串,不讓腳本因此中斷(set -u 底下 || true 保底)。
+VNC_PASSWORD="$(node -e 'try{process.stdout.write(String((JSON.parse(require("fs").readFileSync("/data/options.json","utf8")).VNC_PASSWORD)||""))}catch(e){}' 2>/dev/null || true)"
+
+X11VNC_PID=""
+WEBSOCKIFY_PID=""
+if [ -z "${VNC_PASSWORD}" ]; then
+  echo "[etag-relay] VNC_PASSWORD 未設定,不啟動 x11vnc/websockify(noVNC 遠端登入功能停用)"
+else
+  # 密碼檔存 /data(持久卷),0600 權限;密碼值本身絕不進 log。
+  if x11vnc -storepasswd "${VNC_PASSWORD}" /data/.vncpasswd >/dev/null 2>&1; then
+    chmod 600 /data/.vncpasswd 2>/dev/null || true
+    x11vnc -display "${DISPLAY}" -forever -shared -rfbauth /data/.vncpasswd \
+      -rfbport 5900 -localhost -noxdamage -quiet &
+    X11VNC_PID=$!
+    echo "[etag-relay] x11vnc 啟動(rfbport 5900,僅 localhost)"
+
+    # noVNC 首頁便利性:release 版首頁是 vnc.html,補一個 index.html 軟連結,
+    # 讓 https://etag-vnc.gafferland.net/ 不用手打檔名就能直接開。
+    if [ ! -f /usr/share/novnc/index.html ] && [ -f /usr/share/novnc/vnc.html ]; then
+      ln -sf vnc.html /usr/share/novnc/index.html 2>/dev/null || true
+    fi
+
+    websockify --web=/usr/share/novnc 8098 localhost:5900 &
+    WEBSOCKIFY_PID=$!
+    echo "[etag-relay] websockify on :8098"
+  else
+    echo "[etag-relay] 警告:x11vnc 密碼檔建立失敗,不啟動 x11vnc/websockify"
+  fi
+fi
+
+trap 'kill ${XVFB_PID} ${X11VNC_PID} ${WEBSOCKIFY_PID} 2>/dev/null || true' EXIT
 exec node server.js
