@@ -3,9 +3,9 @@
 # Base image 已內建 chromium + 所有系統相依套件(fonts/libs),版本 tag 與
 # package.json 的 "playwright" npm 套件版本必須完全一致(否則 npm install 會
 # 嘗試下載另一版 chromium,容器內無網路寫入權限/體積暴增)。
-# 目前 pin: v1.62.0(package.json 同步 pin "playwright": "1.62.0")。
+# 目前 pin: v1.61.1(package.json 同步 pin "playwright": "1.61.1")。
 # 之後升級 playwright 版本時,務必同時改這裡的 tag 與 package.json 的版本號。
-FROM mcr.microsoft.com/playwright:v1.62.0-jammy
+FROM mcr.microsoft.com/playwright:v1.61.1-jammy
 
 WORKDIR /app
 
