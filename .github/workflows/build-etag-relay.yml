@@ -53,5 +53,6 @@ jobs:
           tags: |
             ghcr.io/jiahaoliu322/etag-relay-amd64:${{ steps.meta.outputs.version }}
             ghcr.io/jiahaoliu322/etag-relay-amd64:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # ⚠ 刻意不用 cache-from/cache-to: type=gha。首次建置掛了 47 分鐘還沒結束,
+          # 對 playwright 這種 2.2GB 基礎映像做 mode=max 快取匯出,搬運量會多一倍以上、
+          # 實測會拖到不可用。我們一個月才 build 幾次,省下的時間遠不及匯出的代價。
