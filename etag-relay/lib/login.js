@@ -75,12 +75,32 @@ async function startLogin({ account, password, onCaptchaReady }) {
   const loginId = crypto.randomUUID();
   const token = newToken();
 
+  // headless:false ＋ xvfb 虛擬螢幕(Dockerfile CMD 用 xvfb-run 包住整個 process)——
+  // 2026-07-27 E1-d 實測:headless 模式下遠通回 {"isSucceed":false,"errorMessage":"驗證失敗,
+  // 請重新整理頁面後再試"} ＝ reCAPTCHA v3 判定為機器人(4 碼驗證碼本身是對的)。
+  // v3 主要看瀏覽器指紋/行為,headless 是最大扣分項;改跑真實 Chrome on xvfb 提高分數。
   const browser = await chromium.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled'],
+    headless: false,
+    args: [
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled',
+      '--window-size=1440,900',
+    ],
   });
   try {
-    const context = await browser.newContext({ locale: 'zh-TW', userAgent: UA });
+    const context = await browser.newContext({
+      locale: 'zh-TW',
+      timezoneId: 'Asia/Taipei',
+      viewport: { width: 1440, height: 900 },
+      userAgent: UA,
+    });
+    // 抹掉 navigator.webdriver 等自動化指紋(v3 會讀)
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      Object.defineProperty(navigator, 'languages', { get: () => ['zh-TW', 'zh', 'en'] });
+      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+    });
     const page = await context.newPage();
 
     // 攔截登入 AJAX 回應(SmartIDLogin),供成功判定與失敗診斷用(只留內容片段,不含帳密)
@@ -117,8 +137,12 @@ async function startLogin({ account, password, onCaptchaReady }) {
     await page.waitForSelector('#smart-account-login-account', { state: 'visible', timeout: 15000 });
 
     // 2. 填帳密
-    await page.fill('#smart-account-login-account', account);
-    await page.fill('#smartIDLogin_smartPassword', password);
+    // 逐字輸入(帶延遲)＋滑鼠移動:v3 也看互動行為,fill() 瞬間灌值是機器人特徵
+    await page.mouse.move(700, 400);
+    await page.click('#smart-account-login-account');
+    await page.type('#smart-account-login-account', account, { delay: 90 });
+    await page.click('#smartIDLogin_smartPassword');
+    await page.type('#smartIDLogin_smartPassword', password, { delay: 90 });
 
     // 3. 等驗證碼圖載入(vcodeImage src 由 JS 帶入);沒載到就點刷新再等
     const imgSel = '#section-2 .vcodeImage';
@@ -151,7 +175,8 @@ async function startLogin({ account, password, onCaptchaReady }) {
         loginId,
         resolve: async (code) => {
           try {
-            await page.fill('#smartIDLogin_validateCode', code);
+            await page.click('#smartIDLogin_validateCode');
+            await page.type('#smartIDLogin_validateCode', code, { delay: 120 });
             // 4. 頁面原生送出(grecaptcha v3 + AJAX);點含 sForm2 的送出連結
             await page.click("a[onclick*=\"'sForm2'\"]");
             // 5. 成功偵測(AJAX 式登入,45s——含 grecaptcha 執行與遠通回應時間)

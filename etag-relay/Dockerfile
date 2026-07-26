@@ -26,4 +26,4 @@ VOLUME ["/data"]
 
 EXPOSE 8099
 
-CMD ["node", "server.js"]
+CMD ["xvfb-run", "--auto-servernum", "--server-args=-screen 0 1440x900x24", "node", "server.js"]
