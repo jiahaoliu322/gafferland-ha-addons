@@ -185,7 +185,9 @@ async function notifyVercel(payload) {
 
 // 觸發一次登入流程(不 await 完成——呼叫端 fire-and-forget,結果透過 saveSession 落地、
 // 下次查詢自然吃到新 session)。reason 只供 log 分類,絕不含帳密。
-function triggerLogin(reason) {
+// mode:'auto'(預設)＝先試自動登入一次,失敗轉真人;'manual'＝直接進真人遠端登入
+// (使用者從 /collect 主動按「重新登入遠通」時用,不必白等軌道 A 的 4 碼視窗)。
+function triggerLogin(reason, mode) {
   if (loginInFlight) {
     console.log(`[etag-relay] 登入流程已在進行中,略過重複觸發(reason=${reason})`);
     return loginInFlight;
@@ -195,7 +197,7 @@ function triggerLogin(reason) {
     return Promise.resolve();
   }
 
-  console.log(`[etag-relay] 觸發登入流程(reason=${reason})`);
+  console.log(`[etag-relay] 觸發登入流程(reason=${reason},mode=${mode || 'auto'})`);
   const { startLogin } = require('./lib/login');
   loginInFlight = startLogin({
     account: options.FETC_ACCOUNT,
@@ -204,6 +206,7 @@ function triggerLogin(reason) {
     vncUrl: options.VNC_PUBLIC_URL,
     manualTtlMs: (Number(options.MANUAL_LOGIN_TTL_MIN) || 15) * 60 * 1000,
     onNotify: notifyVercel,
+    mode: mode === 'manual' ? 'manual' : 'auto',
   })
     .then(({ cookies, via, loginId }) => {
       const asObj = Object.fromEntries((cookies || []).map((c) => [c.name, c.value]));
@@ -308,8 +311,12 @@ async function handleHealth(req, res) {
 // fire-and-forget(同 triggerLogin 既有語意):回應只回「有沒有啟動」,不等登入流程跑完。
 async function handleLogin(req, res) {
   if (!requireSecret(req, res, options.RELAY_SECRET)) return;
-  const p = triggerLogin('manual-request');
-  return sendJson(res, 200, { ok: true, started: !!p, inFlight: !!loginInFlight });
+  // body 可有可無(空 body 視同 mode:'auto');壞 JSON 不擋觸發,當作沒帶參數。
+  let body = {};
+  try { body = await readBody(req); } catch (e) { body = {}; }
+  const mode = body && body.mode === 'manual' ? 'manual' : 'auto';
+  const p = triggerLogin('manual-request', mode);
+  return sendJson(res, 200, { ok: true, started: !!p, inFlight: !!loginInFlight, mode });
 }
 
 // 內部用:登入流程(lib/login.js)取得新 session 後寫回。不對外(Cloudflare

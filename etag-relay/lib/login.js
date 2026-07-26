@@ -129,7 +129,10 @@ async function captureCaptchaImage(page) {
 // - vncUrl/manualTtlMs:軌道 B(真人遠端登入)用——onNotify(mode:'manual') 帶給 Vercel。
 // - onNotify(payload):單一物件參數,payload.mode 為 'auto'|'manual'|'manual-timeout'
 //   (mode:'success' 由呼叫端 server.js 在 Promise resolve 之後自行發,不在這裡)。
-async function startLogin({ account, password, profileDir, vncUrl, manualTtlMs, onNotify }) {
+// - mode:'auto'(預設,自動觸發用:keep-alive/查詢撞失效)先試軌道 A;**'manual' 直接跳軌道 B**
+//   ——使用者從 /collect 按「重新登入遠通」時走這條,不必先白等 5 分鐘軌道 A 的 4 碼視窗
+//   (v3 幾乎必擋自動登入,實測結論見計劃 E1-d 判定)。
+async function startLogin({ account, password, profileDir, vncUrl, manualTtlMs, onNotify, mode }) {
   const { chromium } = require('playwright');
 
   const loginId = crypto.randomUUID();
@@ -142,11 +145,17 @@ async function startLogin({ account, password, profileDir, vncUrl, manualTtlMs, 
       '--no-sandbox',
       '--disable-dev-shm-usage',
       '--disable-blink-features=AutomationControlled',
-      '--window-size=1440,900',
+      // Xvfb 螢幕是 1440x900(run.sh),視窗高度留給瀏覽器 UI(網址列/分頁列 ~44px)——
+      // 否則視窗比螢幕高,軌道 B 的真人在 noVNC 裡看不到頁面底部(含登入送出鈕)。
+      '--window-size=1440,856',
+      '--window-position=0,0',
     ],
     locale: 'zh-TW',
     timezoneId: 'Asia/Taipei',
-    viewport: { width: 1440, height: 900 },
+    // viewport:null＝頁面 viewport 跟著真實視窗大小。**軌道 B 的關鍵**:若鎖死 viewport,
+    // playwright 會把視窗撐到「viewport + 瀏覽器 UI」而超出 Xvfb 螢幕,真人看到的畫面與
+    // 自動化操作的座標也會不一致。
+    viewport: null,
     userAgent: UA,
   };
 
@@ -196,7 +205,8 @@ async function startLogin({ account, password, profileDir, vncUrl, manualTtlMs, 
     }
 
     await openLoginForm(page, account, password);
-    const imageBuffer = await captureCaptchaImage(page);
+    // mode==='manual' 直接走真人:不必截 4 碼圖(那張圖只有軌道 A 的 LINE 回碼流程用得到)。
+    const imageBuffer = mode === 'manual' ? null : await captureCaptchaImage(page);
 
     return await new Promise((resolve, reject) => {
       let settled = false;
@@ -246,6 +256,13 @@ async function startLogin({ account, password, profileDir, vncUrl, manualTtlMs, 
           return finish(reject, e);
         }
       };
+
+      // 直接指定真人模式:不掛 pending(沒有 4 碼圖可提交)、不設軌道 A 逾時計時器。
+      if (mode === 'manual') {
+        console.log(`[login] 依請求直接進軌道 B(真人,loginId=${loginId})`);
+        toManual();
+        return;
+      }
 
       pending.set(token, {
         imageBuffer,
