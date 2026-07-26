@@ -39,18 +39,32 @@ function getCaptchaImage(token) {
   return entry.imageBuffer;
 }
 
-// 送出後輪詢:FETC_P 認證 cookie 出現 或 導向 /Member ＝ 成功;逾時 ＝ 失敗(驗證碼錯/v3 擋)。
-async function waitLoginSuccess(page, context, timeoutMs) {
+// 送出後判定成功:遠通登入是 AJAX(data-ajax-success="SmartIDHandler"),成功不一定導航,
+// 故三路並行判定 —— ①FETC_P 認證 cookie 出現(E0 證實登入後才有) ②URL 變 /Member
+// ③攔截到的登入 AJAX 回應內容(由 startLogin 掛的 response listener 寫入 ctx.loginResponse)。
+// 逾時回 {ok:false, detail}:detail 帶遠通實際回應片段/頁面錯誤訊息,供日誌診斷(不含帳密)。
+async function waitLoginSuccess(page, context, ctx, timeoutMs) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
       const cookies = await context.cookies();
-      if (cookies.some((c) => c.name === 'FETC_P' && c.value)) return true;
-      if (/\/Member/i.test(page.url())) return true;
+      if (cookies.some((c) => c.name === 'FETC_P' && c.value)) return { ok: true };
+      if (/\/Member/i.test(page.url())) return { ok: true };
     } catch (e) { /* 導航中讀 cookie 可能短暫失敗,續輪詢 */ }
     await page.waitForTimeout(500);
   }
-  return false;
+
+  // 逾時:蒐集診斷資訊(遠通 AJAX 回應 + 頁面上的驗證訊息)
+  let detail = '';
+  if (ctx.loginResponse) detail += `ajax=${String(ctx.loginResponse).slice(0, 300)}`;
+  try {
+    const msgs = await page.$$eval(
+      '#section-2 .validate-error, #_alert_message, #_alert_withTitle_message',
+      (els) => els.map((e) => (e.textContent || '').trim()).filter(Boolean).join(' | ')
+    );
+    if (msgs) detail += ` page="${msgs.slice(0, 200)}"`;
+  } catch (e) { /* 頁面可能已變動 */ }
+  return { ok: false, detail: detail || '(無可用診斷資訊)' };
 }
 
 // 啟動一次登入流程。回 Promise<{cookies}>,失敗 reject。
@@ -68,6 +82,17 @@ async function startLogin({ account, password, onCaptchaReady }) {
   try {
     const context = await browser.newContext({ locale: 'zh-TW', userAgent: UA });
     const page = await context.newPage();
+
+    // 攔截登入 AJAX 回應(SmartIDLogin),供成功判定與失敗診斷用(只留內容片段,不含帳密)
+    const ctx = { loginResponse: null };
+    page.on('response', async (resp) => {
+      try {
+        if (/UX030101SmartIDLogin/i.test(resp.url())) {
+          const body = await resp.text().catch(() => '');
+          ctx.loginResponse = `status=${resp.status()} body=${body.slice(0, 300)}`;
+        }
+      } catch (e) { /* 忽略:診斷用途,不可影響主流程 */ }
+    });
 
     await page.goto(HOME_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
@@ -129,9 +154,9 @@ async function startLogin({ account, password, onCaptchaReady }) {
             await page.fill('#smartIDLogin_validateCode', code);
             // 4. 頁面原生送出(grecaptcha v3 + AJAX);點含 sForm2 的送出連結
             await page.click("a[onclick*=\"'sForm2'\"]");
-            // 5. 成功偵測
-            const ok = await waitLoginSuccess(page, context, 25000);
-            if (!ok) return finish(reject, new Error('login-failed(驗證碼錯誤或 reCAPTCHA v3 未通過)'));
+            // 5. 成功偵測(AJAX 式登入,45s——含 grecaptcha 執行與遠通回應時間)
+            const res = await waitLoginSuccess(page, context, ctx, 45000);
+            if (!res.ok) return finish(reject, new Error('login-failed: ' + res.detail));
             const cookies = await context.cookies();
             return finish(resolve, { cookies });
           } catch (e) {
