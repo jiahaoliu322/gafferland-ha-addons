@@ -10,18 +10,16 @@ FROM mcr.microsoft.com/playwright:v1.61.1-jammy
 WORKDIR /app
 
 # xvfb 虛擬螢幕(headed Chrome 用;base image 不保證有 xvfb-run 包裝腳本,故明確安裝)＋
-# x11vnc/noVNC/websockify(Round F 真人遠端登入用:自動登入失敗時老闆透過瀏覽器看畫面手動輸碼)。
-# jammy universe 有時缺 novnc/websockify 套件(視 apt 索引狀態),第一段失敗就自動切 pip+tarball
-# fallback——build 只跑一次就要成功,不留給人手動重試猜 apt 套件名。
+# x11vnc(Round F 真人遠端登入:自動登入失敗時老闆透過瀏覽器看畫面手動輸碼)。
+#
+# ⚠ 0.3.0 起這裡**只裝三個 apt 套件**,刻意回到與能正常 build 的 0.1.6 幾乎相同的形狀。
+# 0.2.0/0.2.1 曾在此多裝 novnc/websockify(＋pip/curl 備援)與 Google Chrome,結果 HA 上
+# docker build 反覆失敗/長時間無輸出,而 HA 不提供 build 輸出、無從診斷。
+# 現在 noVNC 改走 npm(@novnc/novnc,只有函式庫)＋自寫的極簡頁面,WebSocket→VNC 轉發改用
+# Node 的 ws 自己做(見 lib/vnc.js),完全不需要 python/websockify/額外下載。
 USER root
 RUN apt-get update \
     && apt-get install -y --no-install-recommends xvfb x11-utils x11vnc \
-    && ( apt-get install -y --no-install-recommends novnc websockify \
-         || ( apt-get install -y --no-install-recommends python3-pip ca-certificates curl \
-              && pip3 install --no-cache-dir websockify \
-              && mkdir -p /usr/share/novnc \
-              && curl -fsSL https://github.com/novnc/noVNC/archive/refs/tags/v1.5.0.tar.gz \
-                 | tar xz --strip-components=1 -C /usr/share/novnc ) ) \
     && rm -rf /var/lib/apt/lists/*
 
 # 只裝 production 依賴(cheerio 解析 + playwright,登入流程用)。

@@ -419,6 +419,16 @@ function scheduleKeepAlive() {
 }
 
 if (require.main === module) {
+  // noVNC 遠端畫面(Round F 真人遠端登入):獨立 http server on :8098,
+  // 只有設了 VNC_PASSWORD 才啟動(未設＝功能停用,見 lib/vnc.js)。
+  try {
+    const { startVncServer } = require('./lib/vnc');
+    startVncServer({ enabled: !!options.VNC_PASSWORD });
+  } catch (e) {
+    // noVNC 起不來不可拖垮中繼本體(查詢/結算是主功能,遠端登入只是 session 更新手段)
+    console.error('[etag-relay] noVNC 服務啟動失敗(不影響查詢功能):', e && e.message);
+  }
+
   server.listen(PORT, () => {
     console.log(`[etag-relay] listening on :${PORT}`);
     if (options.FETC_ACCOUNT) {
