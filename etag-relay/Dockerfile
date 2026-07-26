@@ -9,6 +9,11 @@ FROM mcr.microsoft.com/playwright:v1.61.1-jammy
 
 WORKDIR /app
 
+# xvfb 虛擬螢幕(headed Chrome 用;base image 不保證有 xvfb-run 包裝腳本,故明確安裝)
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends xvfb x11-utils \
+    && rm -rf /var/lib/apt/lists/*
+
 # 只裝 production 依賴(cheerio 解析 + playwright,登入流程用)。
 # PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1:base image 已含對應版本 chromium,
 # 避免 npm install 的 postinstall 重複下載(容器內無此需求、也省建置時間)。
@@ -26,4 +31,7 @@ VOLUME ["/data"]
 
 EXPOSE 8099
 
-CMD ["xvfb-run", "--auto-servernum", "--server-args=-screen 0 1440x900x24", "node", "server.js"]
+COPY run.sh ./
+RUN chmod +x run.sh
+
+CMD ["./run.sh"]

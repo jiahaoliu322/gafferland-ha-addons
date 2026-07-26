@@ -1,5 +1,5 @@
 name: "eTag Relay"
-version: "0.1.5"
+version: "0.1.6"
 slug: "etag_relay"
 description: "遠通(FETC)eTag 通行明細中繼服務,供 Gafferland Vercel cron-etag 呼叫(台灣住宅 IP 出口)"
 arch:
