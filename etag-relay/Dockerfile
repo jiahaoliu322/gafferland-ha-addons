@@ -1,42 +1,36 @@
 # etag-relay — HA add-on
 #
-# Base image 已內建 chromium + 所有系統相依套件(fonts/libs),版本 tag 與
-# package.json 的 "playwright" npm 套件版本必須完全一致(否則 npm install 會
-# 嘗試下載另一版 chromium,容器內無網路寫入權限/體積暴增)。
-# 目前 pin: v1.61.1(package.json 同步 pin "playwright": "1.61.1")。
-# 之後升級 playwright 版本時,務必同時改這裡的 tag 與 package.json 的版本號。
-FROM mcr.microsoft.com/playwright:v1.61.1-jammy
+# ⚠ 0.3.2 起改用 node:20-bookworm-slim,**不再用 mcr.microsoft.com/playwright 官方映像**。
+# 原因(2026-07-27 實測):playwright 官方映像壓縮後約 2GB、解壓 6-8GB,在 GitHub Actions
+# 上 build+push 連續兩次都卡在 build-push 超過 45/79 分鐘無法完成(runner 只有約 14GB 磁碟,
+# 匯出/上傳這種體積會撐在邊緣)。改成 slim base ＋ 只裝 chromium,映像預估降到 1GB 以內,
+# 順帶讓 HA 端首次 pull 快得多。
+#
+# 瀏覽器只有「真人透過 noVNC 手動登入遠通」這一步會用到(查詢/結算全是純 HTTP,見
+# lib/fetc-client.js),所以只需要 chromium,不需要官方映像那整套多瀏覽器環境。
+FROM node:20-bookworm-slim
 
 WORKDIR /app
 
-# xvfb 虛擬螢幕(headed Chrome 用;base image 不保證有 xvfb-run 包裝腳本,故明確安裝)＋
-# x11vnc(Round F 真人遠端登入:自動登入失敗時老闆透過瀏覽器看畫面手動輸碼)。
-#
-# ⚠ 0.3.0 起這裡**只裝三個 apt 套件**,刻意回到與能正常 build 的 0.1.6 幾乎相同的形狀。
-# 0.2.0/0.2.1 曾在此多裝 novnc/websockify(＋pip/curl 備援)與 Google Chrome,結果 HA 上
-# docker build 反覆失敗/長時間無輸出,而 HA 不提供 build 輸出、無從診斷。
-# 現在 noVNC 改走 npm(@novnc/novnc,只有函式庫)＋自寫的極簡頁面,WebSocket→VNC 轉發改用
-# Node 的 ws 自己做(見 lib/vnc.js),完全不需要 python/websockify/額外下載。
-USER root
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends xvfb x11-utils x11vnc \
-    && rm -rf /var/lib/apt/lists/*
-
-# 只裝 production 依賴(cheerio 解析 + playwright,登入流程用)。
-# PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1:base image 已含對應版本 chromium,
-# 避免 npm install 的 postinstall 重複下載(容器內無此需求、也省建置時間)。
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV NODE_ENV=production
+# 瀏覽器裝到固定路徑,避免落在 root 家目錄而在不同執行使用者下找不到
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
+# 只裝 production 依賴(cheerio 解析、playwright 登入、ws＋@novnc/novnc 遠端畫面)
 COPY package.json package-lock.json* ./
 RUN npm install --omit=dev --no-audit --no-fund
 
-# ⚠ 0.2.1 移除「安裝真 Google Chrome」那一步(原 `npx playwright install --with-deps chrome`)。
-# 2026-07-27 實測:該步驟在此環境會讓 docker build 卡住超過 25 分鐘無輸出、無法完成。
-# 取捨:真 Chrome 只是為了拉高「自動登入」的 reCAPTCHA v3 分數,而 Round F 的主路線是**真人**
-# 透過 noVNC 手動登入——真人操作用 base image 內建的 chromium 一樣過得了 v3。lib/login.js 本就
-# 會在 channel:'chrome' 啟動失敗時自動 fallback 回內建 chromium,故此處不裝、程式零改動。
-# 日後若要再試真 Chrome,單獨開一版驗證,不要混在功能版一起賭 build。
+# chromium ＋ 其系統相依(playwright 官方 --with-deps 會裝該版對應的那批 lib)。
+# ⚠ 這裡**故意不設** PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD——slim base 沒有內建瀏覽器,
+# 這步就是要真的把 chromium 抓下來。
+RUN npx playwright install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
+
+# xvfb 虛擬螢幕(headed chromium 用)＋x11vnc(noVNC 遠端登入)＋
+# CJK 字型(**必要**:遠通登入頁是中文,少了字型在 noVNC 只會看到一堆方框,人根本沒辦法操作)。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends xvfb x11-utils x11vnc fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY server.js ./
 COPY lib ./lib

@@ -1,5 +1,5 @@
 name: "eTag Relay"
-version: "0.3.1"
+version: "0.3.2"
 slug: "etag_relay"
 # ⚠ 有 image: 就**不會**在 HA 上 build,Supervisor 只做 docker pull。
 # 原因見 .github/workflows/build-etag-relay.yml 檔頭:HA 本機 build 會無聲卡死且無從診斷。
