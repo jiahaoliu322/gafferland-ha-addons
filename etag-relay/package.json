@@ -1,0 +1,18 @@
+{
+  "name": "etag-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "HA add-on:遠通(FETC)eTag 通行明細中繼服務,供 Gafferland Vercel cron-etag 呼叫(台灣住宅 IP 出口)",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test:parse": "node test-parse.js"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "playwright": "1.62.0"
+  }
+}
