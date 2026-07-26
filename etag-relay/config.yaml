@@ -1,6 +1,11 @@
 name: "eTag Relay"
-version: "0.3.0"
+version: "0.3.1"
 slug: "etag_relay"
+# ⚠ 有 image: 就**不會**在 HA 上 build,Supervisor 只做 docker pull。
+# 原因見 .github/workflows/build-etag-relay.yml 檔頭:HA 本機 build 會無聲卡死且無從診斷。
+# {arch} 由 Supervisor 代換(本 add-on 只支援 amd64),tag 取自上方 version——
+# **改 etag-relay/ 內容一定要同時 bump version**,否則 HA 抓不到新映像。
+image: "ghcr.io/jiahaoliu322/etag-relay-{arch}"
 description: "遠通(FETC)eTag 通行明細中繼服務,供 Gafferland Vercel cron-etag 呼叫(台灣住宅 IP 出口)"
 arch:
   - amd64

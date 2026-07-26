@@ -1,0 +1,57 @@
+# 在 GitHub Actions 上建置 etag-relay 映像並推到 ghcr.io。
+#
+# 為什麼要這樣做(2026-07-27):Home Assistant 主機上的 docker build 會**卡住不動**——
+# Supervisor 只印「Starting build」,之後既不報錯也不完成,連 job lock 都不放(導致
+# add-on 無法更新/停止/移除,只能重開機)。而 HA 不提供 build 輸出,完全無從診斷。
+# 改成雲端建置後:build 失敗看得到完整輸出,HA 端只剩單純 docker pull。
+#
+# config.yaml 的 `image:` 指向這裡推的映像,tag = config.yaml 的 version,
+# 所以**每次改 etag-relay/ 都要記得 bump version**,否則 HA 端不會抓到新映像。
+name: build etag-relay
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'etag-relay/**'
+      - '.github/workflows/build-etag-relay.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # 版本號以 config.yaml 為單一事實來源,避免兩處各寫一份而對不上
+      - id: meta
+        run: |
+          VERSION=$(sed -n 's/^version: *"\(.*\)".*/\1/p' etag-relay/config.yaml)
+          if [ -z "$VERSION" ]; then echo "找不到 config.yaml 的 version"; exit 1; fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "建置版本:$VERSION"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./etag-relay
+          file: ./etag-relay/Dockerfile
+          platforms: linux/amd64
+          push: true
+          # HA add-on 的 image 設定會把 {arch} 換成 amd64,tag 用 config.yaml 的 version。
+          # 同時推 latest 方便人工排查,HA 實際只會抓帶版號那個。
+          tags: |
+            ghcr.io/jiahaoliu322/etag-relay-amd64:${{ steps.meta.outputs.version }}
+            ghcr.io/jiahaoliu322/etag-relay-amd64:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
