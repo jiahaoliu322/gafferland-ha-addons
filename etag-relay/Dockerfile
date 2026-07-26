@@ -33,10 +33,12 @@ ENV NODE_ENV=production
 COPY package.json package-lock.json* ./
 RUN npm install --omit=dev --no-audit --no-fund
 
-# 真 Google Chrome(channel=chrome):reCAPTCHA v3 對真 Chrome 評分明顯高於 bundled Chromium。
-# 裝失敗不擋 build——lib/login.js 會自動 fallback 回 base image 內建的 chromium。
-RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0 npx playwright install --with-deps chrome \
-    || echo "[build] 警告:Google Chrome 安裝失敗,將 fallback 使用 bundled chromium"
+# ⚠ 0.2.1 移除「安裝真 Google Chrome」那一步(原 `npx playwright install --with-deps chrome`)。
+# 2026-07-27 實測:該步驟在此環境會讓 docker build 卡住超過 25 分鐘無輸出、無法完成。
+# 取捨:真 Chrome 只是為了拉高「自動登入」的 reCAPTCHA v3 分數,而 Round F 的主路線是**真人**
+# 透過 noVNC 手動登入——真人操作用 base image 內建的 chromium 一樣過得了 v3。lib/login.js 本就
+# 會在 channel:'chrome' 啟動失敗時自動 fallback 回內建 chromium,故此處不裝、程式零改動。
+# 日後若要再試真 Chrome,單獨開一版驗證,不要混在功能版一起賭 build。
 
 COPY server.js ./
 COPY lib ./lib
