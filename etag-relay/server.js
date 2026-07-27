@@ -243,8 +243,6 @@ function triggerLogin(reason) {
 
 async function resolvePlateCin(plate) {
   if (sessionMeta.plateCinCache[plate]) return sessionMeta.plateCinCache[plate];
-  // TODO(待活 session 驗證,見 lib/fetc-client.js resolveCin 註解):端點/解析結構未經
-  // E0 實測,本輪只接線、不驗真值。
   const cin = await resolveCin(jar, plate);
   if (cin) {
     sessionMeta.plateCinCache[plate] = cin;

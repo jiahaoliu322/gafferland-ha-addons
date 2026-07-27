@@ -1,5 +1,7 @@
 name: "eTag Relay v3"
-version: "0.3.8"
+version: "0.3.9"
+# 0.3.9(目標 19 收尾):純註解清理——E0/E1 時代「待活 session 驗證」TODO 全數改為已實測定案
+# 註記(TOKEN_SOURCE_PATH/登入導回啟發式/resolveCin 車輛卡結構)。無任何功能變更,不需急著更新。
 # 0.3.8(Round H1 終局):逆向列印頁 inline script 發現「下載PDF文件」真身=前端把列印頁
 # DOM 打包 base64 POST 到遠通 /UX0000Common/UX000006GetPDF,**由遠通伺服器生成 PDF**
 # (含電子憑證專用章/文字層)。/print 改純 HTTP 復刻同一打包(已用真 session 實測過

@@ -21,7 +21,7 @@ const UA =
   '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 // 任何一個「已登入才看得到」的會員頁面,用來取新鮮 anti-forgery field token。
-// TODO(待活 session 驗證):確認此路徑存在且未登入時會 302 到登入頁(=偵測 session 失效的依據)。
+// (2026-07-27 活 session 實測:路徑存在,未登入導回登入頁=偵測 session 失效的依據。)
 const TOKEN_SOURCE_PATH = '/Member/Setting';
 
 // 會員主頁(車輛清單),resolveCin 用。
@@ -92,8 +92,7 @@ class CookieJar {
 }
 
 // 判斷回應是否被導回登入頁(session 失效的訊號)。
-// TODO(待活 session 驗證):目前用 URL/HTML 關鍵字啟發式判斷,實際導回行為
-// (302 位置、HTML 是否含登入表單特徵字串)需以真實失效 session 驗證後收斂。
+// (2026-07-27 實測:失效 session 會導向 UX0301UserLogin 登入頁,兩條啟發式皆有效。)
 function looksLikeLoginRedirect(finalUrl, html) {
   if (/UX0301UserLogin/i.test(finalUrl || '')) return true;
   if (html && /smartAccount/.test(html) && /smartPassword/.test(html)) return true;
@@ -216,10 +215,8 @@ async function print(jar, fieldToken, { plate, cin, dateTimeMap }) {
 }
 
 // cin(加密車 id)解析:GET 會員主頁,解析車輛清單 plate→cin 對照。
-// TODO(待活 session 驗證):E0 尚未實測此端點的實際路徑與 HTML 結構
-// (見計劃「待補小項①」)。以下為推測骨架,結構待真 session 校正:
-// 假設頁面內有形如 <a data-cln="BWZ-3075" data-cin="xxxxx">…</a> 或
-// <option value="xxxxx" data-plate="BWZ-3075">的車輛選單,實際請以真頁面 dump 調整。
+// (2026-07-27 活 session 實測定案:車輛卡=.swiper-slide[data-cin][data-cln];
+// cin 為帳號層級識別碼(同帳號各車相同),查詢靠 cln 車牌區分。)
 async function resolveCin(jar, plate) {
   const { html, finalUrl } = await rawFetch(jar, MEMBER_VEHICLES_PATH);
   if (looksLikeLoginRedirect(finalUrl, html)) {
