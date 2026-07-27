@@ -1,6 +1,10 @@
-name: "eTag Relay"
+name: "eTag Relay v2"
 version: "0.3.2"
-slug: "etag_relay"
+slug: "etag_relay_v2"
+# ⚠ 2026-07-27 slug 由 etag_relay 改為 etag_relay_v2:HA Supervisor 有一筆昨晚 docker build
+# 卡死的 docker_addon_install 工作(done:false)永久握著 addon_c90d9894_etag_relay 的工作群組鎖,
+# 且寫進持久檔、重開機仍在,ha jobs reset 也清不掉(該指令只重置忽略條件)。新 slug＝新工作群組,
+# 直接繞過。舊 slug 已無安裝,不會有埠號衝突。
 # ⚠ 有 image: 就**不會**在 HA 上 build,Supervisor 只做 docker pull。
 # 原因見 .github/workflows/build-etag-relay.yml 檔頭:HA 本機 build 會無聲卡死且無從診斷。
 # {arch} 由 Supervisor 代換(本 add-on 只支援 amd64),tag 取自上方 version——
