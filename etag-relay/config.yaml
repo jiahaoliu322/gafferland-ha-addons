@@ -1,5 +1,12 @@
 name: "eTag Relay v3"
-version: "0.3.5"
+version: "0.3.6"
+# 0.3.6(Round H1):新端點 /print——中繼開 headless chromium 進遠通「真」列印頁(表單 POST
+# 真站台,絕不 setContent 塞自家 HTML)、按遠通自己的「下載PDF文件」按鈕攔截 download,
+# 取得有文字層、天然含 CJK 的原生 PDF(鐵則:PDF 是收款憑證,必須遠通自己生成——修正
+# Vercel serverless chromium 渲染 printHtml 缺中文字型的問題);請求帶 times 子集,送進
+# 遠通列印端點的 dateTimeJSON 從一開始就只含這個子集(修正混入租期外通行紀錄的問題);
+# 找不到/點不到下載鈕降級 page.pdf()(via 標示區分兩種來源)。/query 加 skipPrint 旗標,
+# 只要 transactions/total 時可省最後一次遠通 print 呼叫+2MB inline 資產。
 # 0.3.5:登入頁改「驗證碼直接顯示+頁面輸碼」為主要路徑(使用者裁示;真 Chrome+持久
 # profile 下實測代送能否過 v3),noVNC 遠端畫面收進同頁「進階」當備援;新端點
 # /captcha.png、/code、/trigger(皆驗 key);修 0.3.4 拆過頭導致驗證碼圖沒載入的問題;

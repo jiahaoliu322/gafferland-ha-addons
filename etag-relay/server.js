@@ -2,6 +2,10 @@
 // Node 內建 http server(不用 express,add-on 體積/攻擊面最小化)。
 // 路由(Round G1 起,軌道 A/LINE 4 碼流程整條移除,唯一登入路徑=真人 noVNC):
 //   POST /query   (驗 X-Relay-Secret)  三步查詢鏈 → 回 transactions/total/printHtml
+//                                       (body.skipPrint:true 省最後 print 步驟,見下)
+//   POST /print   (驗 X-Relay-Secret)  Round H1:開真瀏覽器進遠通真列印頁、按其原生下載鈕
+//                                       取得有文字層/含 CJK 的 PDF(鐵則:PDF 是收款憑證,
+//                                       必須是遠通自己生成的檔案)→ 回 pdfBase64
 //   GET  /health  (驗 X-Relay-Secret)  存活 + session 有效性 + noVNC 連結(vncUrl)
 //   POST /login   (驗 X-Relay-Secret)  手動觸發登入流程(不必等 cron/keep-alive 撞失效)
 //   POST /session (內部用)             登入流程寫回 session cookie(貼 cookie 終極備援)
@@ -13,7 +17,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const { CookieJar, resolveCin, queryAll } = require('./lib/fetc-client');
+const { CookieJar, resolveCin, queryAll, buildDateTimeMapForTimes } = require('./lib/fetc-client');
 
 // ── 設定(HA add-on options 由 supervisor 注入 /data/options.json,本機開發
 // 則走環境變數 fallback,方便未部署前先 `node server.js` 對語法/路由 smoke test)──
@@ -258,7 +262,7 @@ async function handleQuery(req, res) {
   } catch (e) {
     return sendJson(res, 400, { ok: false, reason: 'bad-request' });
   }
-  const { plate, startDate, endDate } = body;
+  const { plate, startDate, endDate, skipPrint } = body;
   if (!plate || !startDate || !endDate) {
     return sendJson(res, 400, { ok: false, reason: 'missing-params' });
   }
@@ -269,7 +273,7 @@ async function handleQuery(req, res) {
       return sendJson(res, 200, { ok: false, reason: 'cin-not-found' });
     }
 
-    const result = await queryAll(jar, { plate, cin, startDate, endDate });
+    const result = await queryAll(jar, { plate, cin, startDate, endDate }, { skipPrint: !!skipPrint });
     saveSession(); // queryAll 過程可能更新 cookie(Set-Cookie 續期),存回
 
     const transactions = result.transactions.map((t) => ({
@@ -280,12 +284,11 @@ async function handleQuery(req, res) {
       amount: t.amount,
     }));
 
-    return sendJson(res, 200, {
-      ok: true,
-      transactions,
-      total: result.total,
-      printHtml: result.printHtml,
-    });
+    const responseBody = { ok: true, transactions, total: result.total };
+    // skipPrint=true:回應完全不含這欄(不是給 null)——省下的正是呼叫端不想要的
+    // 那 2MB inline 資產字串,帶著 null 一樣要佔頻寬。
+    if (!skipPrint) responseBody.printHtml = result.printHtml;
+    return sendJson(res, 200, responseBody);
   } catch (e) {
     if (e && e.code === 'SESSION_EXPIRED') {
       triggerLogin('query-session-expired'); // fire-and-forget:本次查詢仍回失效,下次 cron 補(冪等)
@@ -293,6 +296,71 @@ async function handleQuery(req, res) {
     }
     console.error('[etag-relay] /query error:', e && e.message); // 訊息本身不含帳密/cookie
     return sendJson(res, 500, { ok: false, reason: 'internal-error' });
+  }
+}
+
+// Round H1:憑遠通自己的列印頁 + 下載按鈕產生 PDF(見 lib/print-pdf.js 檔頭鐵則說明)。
+// 回應契約(Vercel 端按此實作,務必勿改):
+//   成功 {ok:true, pdfBase64, via:'fetc-button'|'page-pdf', printTotal}
+//   失敗 {ok:false, reason:'no-rows'|'session-expired'|'pdf-failed'}
+// times = Vercel 配對命中、要收款的門架時間戳子集('yyyy/MM/dd HH:mm:ss',與 /query
+// 回應 transactions[].timeStr 同格式)——這正是「PDF 不可混入租期外通行紀錄」鐵則在
+// 請求層的落地:中繼只會把 times 允許的時間戳送進遠通列印端點,不是先印全部再裁切。
+async function handlePrint(req, res) {
+  if (!requireSecret(req, res, options.RELAY_SECRET)) return;
+  let body;
+  try {
+    body = await readBody(req);
+  } catch (e) {
+    return sendJson(res, 400, { ok: false, reason: 'bad-request' });
+  }
+  const { plate, startDate, endDate, times } = body;
+  if (!plate || !startDate || !endDate || !Array.isArray(times) || !times.length) {
+    return sendJson(res, 400, { ok: false, reason: 'missing-params' });
+  }
+
+  try {
+    const cin = await resolvePlateCin(plate);
+    if (!cin) {
+      // 契約只開放 no-rows/session-expired/pdf-failed 三種 reason——車輛清單裡找不到
+      // 這個車牌本質上也是「沒有可印的資料」,歸類 no-rows(不是例外狀況,見工單回報)。
+      return sendJson(res, 200, { ok: false, reason: 'no-rows' });
+    }
+
+    const { dateTimeMap, fieldToken } = await buildDateTimeMapForTimes(jar, {
+      plate,
+      cin,
+      startDate,
+      endDate,
+      times,
+    });
+    saveSession(); // search/detail 過程可能續期 cookie
+
+    if (!Object.keys(dateTimeMap).length) {
+      return sendJson(res, 200, { ok: false, reason: 'no-rows' });
+    }
+
+    // lazy require(同 lib/login.js 慣例):平時查詢全是純 HTTP,不必每次啟動都載入
+    // playwright 這種重量級模組。
+    const { renderPrintPdf } = require('./lib/print-pdf');
+    const result = await renderPrintPdf({ jar, plate, cin, dateTimeMap, fieldToken });
+    if (!result.ok) {
+      return sendJson(res, 200, { ok: false, reason: result.reason || 'pdf-failed' });
+    }
+    return sendJson(res, 200, {
+      ok: true,
+      pdfBase64: result.pdfBase64,
+      via: result.via,
+      printTotal: result.printTotal,
+    });
+  } catch (e) {
+    if (e && e.code === 'SESSION_EXPIRED') {
+      triggerLogin('print-session-expired'); // fire-and-forget,同 handleQuery 既有模式
+      return sendJson(res, 200, { ok: false, reason: 'session-expired' });
+    }
+    // 契約沒有 internal-error 這個 reason,一律歸 pdf-failed(訊息本身不含帳密/cookie)。
+    console.error('[etag-relay] /print error:', e && e.message);
+    return sendJson(res, 200, { ok: false, reason: 'pdf-failed' });
   }
 }
 
@@ -360,6 +428,7 @@ const server = http.createServer((req, res) => {
   Promise.resolve()
     .then(() => {
       if (req.method === 'POST' && url.pathname === '/query') return handleQuery(req, res);
+      if (req.method === 'POST' && url.pathname === '/print') return handlePrint(req, res);
       if (req.method === 'GET' && url.pathname === '/health') return handleHealth(req, res);
       if (req.method === 'POST' && url.pathname === '/login') return handleLogin(req, res);
       if (req.method === 'POST' && url.pathname === '/session') return handleSession(req, res);

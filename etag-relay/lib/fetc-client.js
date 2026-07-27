@@ -28,6 +28,10 @@ const TOKEN_SOURCE_PATH = '/Member/Setting';
 // 會員主頁車輛清單(2026-07-27 活 session 實測):車輛卡 .swiper-slide[data-cin][data-cln]。
 const MEMBER_VEHICLES_PATH = '/Member';
 
+// 列印端點路徑——print()(純 HTTP)與 Round H1 lib/print-pdf.js(開真瀏覽器 POST 同一張表單
+// 進真列印頁)都要用到,拉成常數避免兩處字面字串日後改一邊漏另一邊。
+const PRINT_PATH = '/UX0505Traffic/UX050508TrafficAdvancedSearchPrint';
+
 // ── Cookie jar ───────────────────────────────────────────────────────────
 // 極簡 jar:{name: value} map。真正的 Set-Cookie 屬性(Path/HttpOnly/Expires)不需要
 // 追蹤——中繼永遠原樣把整包 cookie 回貼給同一個網域,只要 name/value 對即可。
@@ -204,7 +208,7 @@ async function detail(jar, fieldToken, { plate, cin, batchId }) {
 // 3. print:UX050508TrafficAdvancedSearchPrint → 回列印 HTML(呼叫端用 parsePrintRows 解)
 // dateTimeJSON = { [batchId]: ['yyyy/MM/dd HH:mm:ss', ...] }
 async function print(jar, fieldToken, { plate, cin, dateTimeMap }) {
-  return postForm(jar, '/UX0505Traffic/UX050508TrafficAdvancedSearchPrint', {
+  return postForm(jar, PRINT_PATH, {
     __RequestVerificationToken: fieldToken,
     cln: plate,
     cin,
@@ -368,7 +372,11 @@ async function inlinePrintAssets(html, jar) {
 // 回 { transactions, total, printHtml, searchHtml }(printHtml 已是自包含 HTML)。
 // 供 server.js /query 路由呼叫;session 失效時各步驟會 throw code=SESSION_EXPIRED,
 // 由呼叫端 catch 轉成 {ok:false, reason:'session-expired'}。
-async function queryAll(jar, { plate, cin, startDate, endDate }) {
+// opts.skipPrint(Round H1):PDF 現在改由 /print 端點另開真瀏覽器、按遠通原生下載鈕產生
+// (lib/print-pdf.js)——/query 若只是要 transactions/total,印一次遠通 print 端點純屬
+// 浪費(多一次遠通呼叫+inline 資產動輒 2MB),true 時整段跳過,printHtml 回 null。
+async function queryAll(jar, { plate, cin, startDate, endDate }, opts = {}) {
+  const { skipPrint = false } = opts;
   const fieldToken = await getAntiForgeryToken(jar);
   if (!fieldToken) {
     const err = new Error('session-expired');
@@ -389,7 +397,7 @@ async function queryAll(jar, { plate, cin, startDate, endDate }) {
   }
 
   let printHtml = null;
-  if (Object.keys(dateTimeMap).length) {
+  if (!skipPrint && Object.keys(dateTimeMap).length) {
     const rawPrintHtml = await print(jar, fieldToken, { plate, cin, dateTimeMap });
     printHtml = await inlinePrintAssets(rawPrintHtml, jar);
   }
@@ -397,6 +405,38 @@ async function queryAll(jar, { plate, cin, startDate, endDate }) {
   const total = transactions.reduce((sum, t) => sum + (Number.isFinite(t.amount) ? t.amount : 0), 0);
 
   return { transactions, total, printHtml, searchHtml };
+}
+
+// 供 /print 端點用:純 HTTP 準備「只含 times 子集」的 dateTimeMap,不呼叫 print 端點本身
+// (PDF 這步交給 lib/print-pdf.js 開真瀏覽器做)。times = 呼叫端(Vercel 配對命中的門架時間戳)
+// 想收款的子集,格式與 /query 回應 transactions[].timeStr 相同('yyyy/MM/dd HH:mm:ss')。
+// 逐批 detail 拿到的每列 g.timeStr 只要在 timesSet 內就收進該 batchId 底下——這正是「PDF
+// 不可混入租期外通行紀錄」鐵則在資料層的落地:送進遠通列印端點的 dateTimeJSON 從一開始
+// 就只含 times 允許的時間戳,不是先拿全量再事後過濾 printHtml。
+// 回 { dateTimeMap, fieldToken }。times 一筆都比對不上任何門架列 → dateTimeMap 為空物件
+// (不是例外——呼叫端據此回 {ok:false, reason:'no-rows'})。session 失效沿用既有
+// code=SESSION_EXPIRED 慣例(search/detail 底層 postForm 已處理)。
+async function buildDateTimeMapForTimes(jar, { plate, cin, startDate, endDate, times }) {
+  const fieldToken = await getAntiForgeryToken(jar);
+  if (!fieldToken) {
+    const err = new Error('session-expired');
+    err.code = 'SESSION_EXPIRED';
+    throw err;
+  }
+
+  const timesSet = new Set(times);
+  const searchHtml = await search(jar, fieldToken, { plate, cin, startDate, endDate });
+  const batches = parseSearchBatches(searchHtml);
+
+  const dateTimeMap = {};
+  for (const batch of batches) {
+    const detailHtml = await detail(jar, fieldToken, { plate, cin, batchId: batch.batchId });
+    const gantries = parseDetailGantries(detailHtml, batch.date);
+    const matched = gantries.filter((g) => timesSet.has(g.timeStr)).map((g) => g.timeStr);
+    if (matched.length) dateTimeMap[batch.batchId] = matched;
+  }
+
+  return { dateTimeMap, fieldToken };
 }
 
 module.exports = {
@@ -407,8 +447,10 @@ module.exports = {
   print,
   resolveCin,
   queryAll,
+  buildDateTimeMapForTimes,
   inlinePrintAssets,
   looksLikeLoginRedirect,
   extractFieldToken,
   fmtDate,
+  PRINT_PATH,
 };
