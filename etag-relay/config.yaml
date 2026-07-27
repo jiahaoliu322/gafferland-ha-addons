@@ -1,6 +1,6 @@
-name: "eTag Relay v2"
+name: "eTag Relay v3"
 version: "0.3.3"
-slug: "etag_relay_v2"
+slug: "etag_relay_v3"
 # ⚠ 2026-07-27 slug 由 etag_relay 改為 etag_relay_v2:HA Supervisor 有一筆昨晚 docker build
 # 卡死的 docker_addon_install 工作(done:false)永久握著 addon_c90d9894_etag_relay 的工作群組鎖,
 # 且寫進持久檔、重開機仍在,ha jobs reset 也清不掉(該指令只重置忽略條件)。新 slug＝新工作群組,
