@@ -1,5 +1,9 @@
 name: "eTag Relay v3"
-version: "0.3.4"
+version: "0.3.5"
+# 0.3.5:登入頁改「驗證碼直接顯示+頁面輸碼」為主要路徑(使用者裁示;真 Chrome+持久
+# profile 下實測代送能否過 v3),noVNC 遠端畫面收進同頁「進階」當備援;新端點
+# /captcha.png、/code、/trigger(皆驗 key);修 0.3.4 拆過頭導致驗證碼圖沒載入的問題;
+# noVNC 接上時自動換新驗證碼。
 # 0.3.4(Round G1/G1b):徹底取消軌道 A(LINE 推 4 碼圖→自動送出,v3 一律判定機器人擋死)、
 # Dockerfile 補裝真 Google Chrome(v3 指紋分數)、noVNC 入口拿掉 Cloudflare Access 改
 # 「連結內建長亂數 token + VNC 密碼」兩層、無 session 自動觸發登入加 1 小時通知冷卻

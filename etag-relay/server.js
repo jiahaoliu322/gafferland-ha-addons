@@ -410,7 +410,19 @@ if (require.main === module) {
   try {
     const { startVncServer, loadVncToken } = require('./lib/vnc');
     vncToken = options.VNC_PASSWORD ? loadVncToken(DATA_DIR) : null;
-    startVncServer({ enabled: !!options.VNC_PASSWORD, token: vncToken });
+    startVncServer({
+      enabled: !!options.VNC_PASSWORD,
+      token: vncToken,
+      // noVNC 用戶端接上畫面時換一張新驗證碼(舊圖可能已過期)
+      onClientConnect: () => require('./lib/login').refreshCaptcha(),
+      // 0.3.5 頁面輸碼主路徑:登入頁直接顯示驗證碼圖+輸碼送出;「開始登入」等同
+      // /collect 的重新登入按鈕(manual-request,不受通知冷卻限制)
+      captcha: {
+        shot: (opts) => require('./lib/login').captchaShot(opts),
+        submit: (code) => require('./lib/login').submitCode(code),
+        trigger: () => triggerLogin('manual-request'),
+      },
+    });
   } catch (e) {
     // noVNC 起不來不可拖垮中繼本體(查詢/結算是主功能,遠端登入只是 session 更新手段)
     console.error('[etag-relay] noVNC 服務啟動失敗(不影響查詢功能):', e && e.message);

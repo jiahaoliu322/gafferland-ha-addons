@@ -30,6 +30,117 @@ const HOME_URL = 'https://www.fetc.net.tw/';
 const DEFAULT_MANUAL_TTL_MS = 15 * 60 * 1000;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
+// 進行中登入流程的 page(同一時間最多一個,server.js loginInFlight 互斥保證)——
+// 給 refreshCaptcha()/captchaShot()/submitCode() 用(0.3.5 起登入頁可直接顯示驗證碼、
+// 頁面輸碼,noVNC 遠端畫面降為同頁備援)。
+let activePage = null;
+// 登入 AJAX(UX030101SmartIDLogin)回應片段——submitCode() 失敗時給頁面看的診斷
+// (只留內容片段,絕不含帳密)。每輪登入流程重置。
+let activeCtx = null;
+// 本輪流程網頁輸碼已嘗試次數。上限 3 次:遠通有鎖帳號風險,「機器不重試」鐵則對真人
+// 驅動的送出放寬為「有限次」,超過就請老闆改走 noVNC(那邊是頁面原生行為,不經我們)。
+let webAttempts = 0;
+const WEB_ATTEMPT_MAX = 3;
+// 本輪流程最終結果('success'|'failed')——submitCode() 輪詢中若 activePage 被主流程
+// 收走(登入完成瀏覽器即關),靠這個判斷是成功收走還是失敗收走。
+let lastFlowResult = null;
+
+// 確保 4 碼驗證碼圖已載入(src 由頁面 JS 帶入,實測**有時要點刷新才會出現**)。
+// 0.3.4 拆軌道 A 時把 captureCaptchaImage 連同這段等待+刷新邏輯一起拆掉=拆過頭,
+// 真人進 noVNC 看到的是空白圖、根本沒辦法輸碼(2026-07-27 使用者實測回報)——補回,
+// 只確保載入、不再截圖。
+async function ensureCaptchaLoaded(page) {
+  const imgSel = '#section-2 .vcodeImage';
+  const imgLoaded = (sel) => {
+    const img = document.querySelector(sel);
+    return !!(img && img.complete && img.naturalWidth > 0);
+  };
+  try {
+    await page.waitForFunction(imgLoaded, imgSel, { timeout: 8000 });
+  } catch (e) {
+    await page.click('#section-2 a.refresh').catch(() => {});
+    await page.waitForFunction(imgLoaded, imgSel, { timeout: 8000 }).catch(() => {});
+  }
+}
+
+// 真人透過 noVNC 剛接上畫面時換一張新驗證碼(server.js 掛進 lib/vnc.js 的 onClientConnect)
+// ——登入流程觸發到老闆真的點開連結中間可能隔好幾分鐘,舊圖可能已過期;連上當下刷新,
+// 老闆看到的永遠是張新鮮有效的圖。沒有進行中的登入頁(頁面已關/尚未開)就靜默略過。
+async function refreshCaptcha() {
+  const page = activePage;
+  if (!page) return;
+  try {
+    await page.click('#section-2 a.refresh');
+    await ensureCaptchaLoaded(page);
+    console.log('[login] noVNC 用戶端接上,已換一張新驗證碼圖');
+  } catch (e) { /* 頁面可能導航中/已關閉——刷新失敗不致命,老闆仍可自己點頁面上的刷新 */ }
+}
+
+// 截目前的 4 碼驗證碼圖(給登入頁 <img> 顯示;refresh=true 先換一張再截)。
+// 沒有進行中的登入流程回 null(頁面據此顯示「開始登入」而不是壞圖)。
+async function captchaShot({ refresh } = {}) {
+  const page = activePage;
+  if (!page) return null;
+  try {
+    if (refresh) await page.click('#section-2 a.refresh').catch(() => {});
+    await ensureCaptchaLoaded(page);
+    const el = await page.$('#section-2 .vcodeImage');
+    return el ? await el.screenshot() : null;
+  } catch (e) {
+    return null; // 頁面導航中/已關閉,當作沒有圖
+  }
+}
+
+// 網頁輸碼送出(0.3.5 使用者裁示:驗證碼顯示在登入頁、頁面直接輸碼=主要路徑)。
+// 由中繼瀏覽器代填代送——這正是 reCAPTCHA v3 先前擋掉的動作,但當時跑的是 bundled
+// chromium;0.3.4 起裝了真 Google Chrome+持久 profile,分數結構不同,值得實測。
+// 若 v3 仍擋,回傳的 message 會帶遠通的「驗證失敗」訊息,頁面引導老闆改走同頁的
+// noVNC 遠端畫面(真人親手操作,v3 必給分)。
+// 回 {ok:true} 或 {ok:false, reason, message?}(message 已 sanitize,不含帳密)。
+async function submitCode(code) {
+  const page = activePage;
+  if (!page) {
+    // 主流程可能剛把瀏覽器收走:成功收走=登入其實已完成(例如老闆在 noVNC 先登了)
+    if (lastFlowResult === 'success') return { ok: true };
+    return { ok: false, reason: 'no-login-in-flight' };
+  }
+  if (!/^\d{4}$/.test(String(code || ''))) return { ok: false, reason: 'bad-code' };
+  if (webAttempts >= WEB_ATTEMPT_MAX) return { ok: false, reason: 'too-many-attempts' };
+  webAttempts += 1;
+
+  try {
+    // 清掉舊碼再逐字輸入(帶延遲——v3 看互動行為,瞬間灌值是機器人特徵)
+    await page.fill('#smartIDLogin_validateCode', '');
+    await page.click('#smartIDLogin_validateCode');
+    await page.type('#smartIDLogin_validateCode', String(code), { delay: 120 });
+    // 頁面原生送出(grecaptcha v3 + AJAX);點含 sForm2 的送出連結
+    await page.click("a[onclick*=\"'sForm2'\"]");
+  } catch (e) {
+    return { ok: false, reason: 'submit-error' };
+  }
+
+  // 等結果:FETC_P 出現=成功(E0 證實);45s 含 grecaptcha 執行與遠通回應時間。
+  const start = Date.now();
+  while (Date.now() - start < 45000) {
+    if (!activePage) {
+      // 主流程收走瀏覽器:成功路徑會先標 lastFlowResult='success' 再關
+      return lastFlowResult === 'success' ? { ok: true } : { ok: false, reason: 'flow-ended' };
+    }
+    try {
+      const cookies = await page.context().cookies();
+      if (cookies.some((c) => c.name === 'FETC_P' && c.value)) return { ok: true };
+    } catch (e) { /* 導航中讀 cookie 可能短暫失敗,續輪詢 */ }
+    // 遠通 AJAX 已回失敗就不用等滿 45s——立即回報,附遠通原話供頁面顯示
+    if (activeCtx && activeCtx.loginResponse && /isSucceed"?\s*:\s*false/i.test(activeCtx.loginResponse)) {
+      const m = activeCtx.loginResponse.match(/errorMessage"?\s*:\s*"([^"]{0,80})"/);
+      activeCtx.loginResponse = null; // 一次性:別讓下一輪嘗試讀到上一輪的舊回應
+      return { ok: false, reason: 'fetc-rejected', message: m ? m[1] : '遠通回覆登入失敗' };
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return { ok: false, reason: 'timeout' };
+}
+
 // 開登入彈窗、切到會員登入分頁、填帳密——真人在 noVNC 接手前的前置動作,抽成函式避免重複。
 async function openLoginForm(page, account, password) {
   // 1. 開登入彈窗:整個登入區在 <div class="popup is_hide" id="_login"> 內(預設隱藏),
@@ -120,17 +231,35 @@ async function startLogin({ account, password, profileDir, vncUrl, manualTtlMs, 
     // persistent context 沒有獨立的 browser 物件,page 用既有分頁或開新的。
     const page = context.pages()[0] || (await context.newPage());
 
+    // 本輪流程狀態重置+攔截登入 AJAX 回應(SmartIDLogin)——submitCode() 失敗診斷用
+    // (只留內容片段,不含帳密)。
+    webAttempts = 0;
+    lastFlowResult = null;
+    activeCtx = { loginResponse: null };
+    const ctx = activeCtx;
+    page.on('response', async (resp) => {
+      try {
+        if (/UX030101SmartIDLogin/i.test(resp.url())) {
+          const body = await resp.text().catch(() => '');
+          ctx.loginResponse = `status=${resp.status()} body=${body.slice(0, 300)}`;
+        }
+      } catch (e) { /* 診斷用途,不可影響主流程 */ }
+    });
+
     await page.goto(HOME_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
     // 持久 profile 的最大紅利:重啟後 FETC_P 可能還在(遠通登入態存活)→ 完全不需要重新登入。
     const existingCookies = await context.cookies();
     if (existingCookies.some((c) => c.name === 'FETC_P' && c.value)) {
       console.log(`[login] profile 已登入,略過登入流程(via=profile,loginId=${loginId})`);
+      lastFlowResult = 'success';
       await context.close().catch(() => {});
       return { cookies: existingCookies, via: 'profile', loginId };
     }
 
     await openLoginForm(page, account, password);
+    await ensureCaptchaLoaded(page);
+    activePage = page; // 此後 noVNC 用戶端接上會觸發 refreshCaptcha()
 
     // 通知 Vercel:老闆要點連結進 noVNC 才能完成登入。
     if (onNotify) {
@@ -145,7 +274,9 @@ async function startLogin({ account, password, profileDir, vncUrl, manualTtlMs, 
       try {
         const cookies = await context.cookies();
         if (cookies.some((c) => c.name === 'FETC_P' && c.value)) {
-          console.log(`[login] 真人(noVNC)登入成功(loginId=${loginId})`);
+          console.log(`[login] 真人登入成功(loginId=${loginId})`);
+          lastFlowResult = 'success'; // 先標結果再收 activePage——submitCode() 輪詢靠這個順序判斷
+          activePage = null;
           await context.close().catch(() => {});
           return { cookies, via: 'manual', loginId };
         }
@@ -163,6 +294,8 @@ async function startLogin({ account, password, profileDir, vncUrl, manualTtlMs, 
     // rethrow,讓「所有路徑都會 context.close()」只有一個出口,不必在每個失敗分支各自重複。
     throw new Error('manual-login-timeout');
   } catch (e) {
+    if (lastFlowResult !== 'success') lastFlowResult = 'failed';
+    activePage = null;
     await context.close().catch(() => {});
     throw e;
   }
@@ -201,4 +334,7 @@ function startKeepAlive({ getJar, intervalMs = 10 * 60 * 1000, onExpired, onAliv
 module.exports = {
   startLogin,
   startKeepAlive,
+  refreshCaptcha,
+  captchaShot,
+  submitCode,
 };

@@ -75,7 +75,10 @@ const MIME = {
   '.json': 'application/json; charset=utf-8',
 };
 
-// 極簡 VNC 頁面。noVNC 的 lib/rfb.js 是 ES module,瀏覽器可直接 import——
+// 極簡登入頁。0.3.5 使用者裁示改版:**驗證碼直接顯示在這頁、頁面輸碼=主要路徑**
+// (由中繼瀏覽器代填代送——先前被 v3 擋時跑的是 bundled chromium,0.3.4 起有真 Chrome+
+// 持久 profile,實測看能不能過);noVNC 遠端畫面收進「進階」摺疊區當同頁備援(v3 連代送
+// 都擋時,真人親手操作必過)。noVNC 的 rfb.js 是 ES module,瀏覽器可直接 import——
 // 底下把整個套件根目錄掛在 /novnc/ 之下,相對 import(./util/logging.js、../vendor/pako 等)才解得開。
 const pageHtml = (rfbEntry) => `<!doctype html>
 <html lang="zh-Hant"><head>
@@ -88,14 +91,20 @@ html,body{margin:0;height:100%;background:#0a0a0a;color:#f5f0e8;
 #screen{width:100vw;height:100vh}
 #screen canvas{display:block}
 .gate{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
-  gap:16px;padding:24px;background:#0a0a0a;z-index:10;text-align:center}
+  gap:16px;padding:24px;background:#0a0a0a;z-index:10;text-align:center;overflow-y:auto}
 .gate h1{font-size:17px;font-weight:500;margin:0;letter-spacing:.5px}
 .gate p{font-size:13px;color:rgba(245,240,232,.5);margin:0;line-height:1.7;max-width:320px}
 .gate input{width:min(280px,80vw);padding:12px 14px;font-size:16px;border-radius:8px;
-  border:1px solid rgba(255,255,255,.18);background:#1a1a1a;color:#f5f0e8}
+  border:1px solid rgba(255,255,255,.18);background:#1a1a1a;color:#f5f0e8;text-align:center}
 .gate button{padding:12px 28px;font-size:15px;border:none;border-radius:8px;
   background:#c9a96e;color:#0a0a0a;font-weight:500}
-.msg{font-size:13px;color:#c9a96e;min-height:18px}
+.gate button.sub{background:transparent;border:1px solid rgba(255,255,255,.18);color:rgba(245,240,232,.7);
+  font-size:13px;padding:8px 16px}
+.msg{font-size:13px;color:#c9a96e;min-height:18px;max-width:320px;line-height:1.6}
+#capImg{width:min(280px,80vw);min-height:64px;border-radius:8px;background:#fff}
+details{max-width:min(320px,84vw)}
+details summary{font-size:13px;color:rgba(245,240,232,.45);cursor:pointer;padding:6px 0}
+details > div{display:flex;flex-direction:column;gap:12px;align-items:center;padding-top:10px}
 .bar{position:fixed;left:0;right:0;bottom:0;display:flex;gap:8px;justify-content:center;
   padding:8px calc(env(safe-area-inset-right) + 8px) calc(env(safe-area-inset-bottom) + 8px)
         calc(env(safe-area-inset-left) + 8px);
@@ -110,23 +119,125 @@ html,body{margin:0;height:100%;background:#0a0a0a;color:#f5f0e8;
   <button id="btnKb">鍵盤</button>
 </div>
 <div class="gate" id="gate">
-  <h1>eTag 遠端登入</h1>
-  <p>連上中繼主機的瀏覽器畫面,完成遠通登入(帳號密碼已預先填好,通常只需輸入畫面上的 4 碼驗證碼)。</p>
-  <input type="password" id="pw" placeholder="VNC 密碼" autocomplete="current-password">
-  <button id="go">連線</button>
-  <div class="msg" id="msg"></div>
+  <div id="cardLoad">
+    <h1>遠通電收登入</h1>
+    <p>檢查登入狀態…</p>
+  </div>
+  <div id="cardStart" class="hide" style="display:flex;flex-direction:column;gap:16px;align-items:center">
+    <h1>遠通電收登入</h1>
+    <p>目前沒有進行中的登入流程。按下方按鈕啟動(約需 10 秒開啟瀏覽器)。</p>
+    <button id="btnStart">開始登入</button>
+    <div class="msg" id="smsg"></div>
+  </div>
+  <div id="cardCode" class="hide" style="display:flex;flex-direction:column;gap:14px;align-items:center">
+    <h1>遠通電收登入</h1>
+    <p>帳號密碼已填好,輸入下圖 4 碼驗證碼即可完成登入。</p>
+    <img id="capImg" alt="驗證碼">
+    <input id="code" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="4 碼驗證碼" autocomplete="one-time-code">
+    <button id="btnSend">送出登入</button>
+    <button id="btnNewCap" class="sub">換一張</button>
+    <div class="msg" id="cmsg"></div>
+    <details id="advBox">
+      <summary>進階:遠端畫面登入(上面送出被擋時用)</summary>
+      <div>
+        <p>連上中繼主機的瀏覽器畫面,親手輸碼、按登入——真人操作不會被 Google 驗證擋。</p>
+        <input type="password" id="pw" placeholder="VNC 密碼" autocomplete="current-password">
+        <button id="go">連線</button>
+        <div class="msg" id="msg"></div>
+      </div>
+    </details>
+  </div>
+  <div id="cardDone" class="hide" style="display:flex;flex-direction:column;gap:16px;align-items:center">
+    <h1>✅ 登入完成</h1>
+    <p>遠通 session 已更新,這個頁面可以關閉了。</p>
+  </div>
 </div>
 <input id="kb" style="position:fixed;opacity:0;pointer-events:none;top:-100px" autocapitalize="off" autocorrect="off">
 <script type="module">
 import RFB from './novnc/${rfbEntry}';
 
 // URL 內建的長亂數 token——連進這個頁面本身就是靠這個 key(見 lib/vnc.js 驗 key 邏輯),
-// 這裡原封不動轉帶去 /websockify,upgrade 那端才會再驗一次(頁面驗過不代表 WS 連線也算數,
-// 兩個是獨立的 HTTP 請求)。
+// 所有 API 請求與 /websockify 連線都要重新帶上(每個都是獨立的 HTTP 請求,各自驗)。
 const KEY = new URLSearchParams(location.search).get('key') || '';
+const withKey = (p) => p + (p.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(KEY);
 
 const $ = (id) => document.getElementById(id);
 const msg = (t) => { $('msg').textContent = t || ''; };
+const cmsg = (t) => { $('cmsg').textContent = t || ''; };
+const showCard = (id) => {
+  for (const c of ['cardLoad', 'cardStart', 'cardCode', 'cardDone']) $(c).classList.toggle('hide', c !== id);
+};
+
+// ── 主要路徑:驗證碼顯示在頁面上、頁面輸碼 ─────────────────────────────
+async function loadCaptcha(refresh) {
+  const r = await fetch(withKey('/captcha.png' + (refresh ? '?refresh=1' : '')), { cache: 'no-store' });
+  if (r.status !== 200) return false;
+  $('capImg').src = URL.createObjectURL(await r.blob());
+  return true;
+}
+
+async function init() {
+  try {
+    if (await loadCaptcha(false)) { showCard('cardCode'); return; }
+  } catch (e) { /* 網路失敗當作無流程 */ }
+  showCard('cardStart');
+}
+init();
+
+$('btnStart').addEventListener('click', async () => {
+  $('smsg').textContent = '啟動瀏覽器中…';
+  $('btnStart').disabled = true;
+  try { await fetch(withKey('/trigger'), { method: 'POST' }); } catch (e) {}
+  // 輪詢等瀏覽器開好、驗證碼圖就緒(冷啟 ~10 秒,最多等 2 分鐘)
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 3000));
+    try {
+      if (await loadCaptcha(false)) { showCard('cardCode'); return; }
+    } catch (e) { /* 續等 */ }
+  }
+  $('smsg').textContent = '啟動逾時,請重新整理頁面再試';
+  $('btnStart').disabled = false;
+});
+
+$('btnNewCap').addEventListener('click', async () => {
+  cmsg('更新驗證碼…');
+  cmsg((await loadCaptcha(true)) ? '' : '更新失敗,流程可能已結束,請重新整理頁面');
+});
+
+$('btnSend').addEventListener('click', async () => {
+  const code = $('code').value.trim();
+  if (!/^\\d{4}$/.test(code)) return cmsg('請輸入 4 碼數字');
+  $('btnSend').disabled = true;
+  cmsg('送出中(Google 驗證+遠通回應約需數秒)…');
+  let r = null;
+  try {
+    r = await (await fetch(withKey('/code'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    })).json();
+  } catch (e) {
+    r = { ok: false, reason: 'network' };
+  }
+  $('btnSend').disabled = false;
+  if (r.ok) return showCard('cardDone');
+  const reasonText = {
+    'fetc-rejected': '遠通拒絕:' + (r.message || '登入失敗') + '——若持續發生,代表仍被 Google 驗證擋,請改用下方「遠端畫面登入」親手操作。',
+    'too-many-attempts': '已嘗試 3 次,為避免帳號被鎖請改用下方「遠端畫面登入」。',
+    'bad-code': '請輸入 4 碼數字',
+    'no-login-in-flight': '登入流程已結束,請重新整理頁面',
+    'flow-ended': '登入流程已結束,請重新整理頁面',
+    'timeout': '等不到遠通回應,請按「換一張」再試,或改用下方遠端畫面登入',
+    'submit-error': '送出失敗,請再試一次',
+    'network': '連線失敗,請再試一次',
+  }[r.reason] || '登入失敗(' + (r.reason || '未知') + ')';
+  cmsg(reasonText);
+  if (r.reason === 'fetc-rejected' || r.reason === 'too-many-attempts') $('advBox').open = true;
+  if (r.reason === 'fetc-rejected' || r.reason === 'timeout') { $('code').value = ''; loadCaptcha(false).catch(() => {}); }
+});
+$('code').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btnSend').click(); });
+
+// ── 備援:noVNC 遠端畫面(真人親手操作)────────────────────────────────
 let rfb = null;
 // securityfailure 訊息(VNC 密碼錯誤/連線被拒)比緊接著觸發的 disconnect 更有診斷價值,
 // 不該被 disconnect 的通用訊息蓋掉——用這個旗標記「這輪已經顯示過原因了」,下次按連線
@@ -220,7 +331,12 @@ function sendFile(res, filePath) {
 // token 由呼叫端(server.js)透過 loadVncToken() 產生後傳入——沒有 token 一律 fail-closed
 // 不啟動,不論 enabled 是否為 true:沒有 Cloudflare Access 之後,token 是唯一擋外部硬闖
 // 的門,寧可整個服務不開,也不要開一個誰都能連的 noVNC 入口。
-function startVncServer({ enabled, token }) {
+// onClientConnect(選配):noVNC 用戶端通過 key 驗證、WS 建立時呼叫——server.js 掛
+// lib/login.js 的 refreshCaptcha(),讓老闆連上當下看到的是張新鮮的驗證碼圖。
+// captcha(選配,0.3.5 頁面輸碼主路徑):{ shot({refresh})→png Buffer|null,
+// submit(code)→{ok,reason?,message?}, trigger()→啟動登入流程 }——server.js 接
+// lib/login.js 的 captchaShot/submitCode 與自己的 triggerLogin('manual-request')。
+function startVncServer({ enabled, token, onClientConnect, captcha }) {
   if (!enabled) {
     console.warn('[etag-relay] VNC_PASSWORD 未設定,不啟動 noVNC 網頁服務');
     return null;
@@ -238,15 +354,73 @@ function startVncServer({ enabled, token }) {
     return null;
   }
 
+  // 小型 JSON body 讀取(只給 /code 用,4KB 上限綽綽有餘)
+  const readSmallBody = (req) => new Promise((resolve) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > 4096) { resolve({}); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')); }
+      catch (e) { resolve({}); }
+    });
+    req.on('error', () => resolve({}));
+  });
+  const sendJson = (res, status, obj) => {
+    const body = JSON.stringify(obj);
+    res.writeHead(status, { 'Content-Type': MIME['.json'], 'Content-Length': Buffer.byteLength(body), 'Cache-Control': 'no-store' });
+    res.end(body);
+  };
+
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, `http://localhost:${VNC_HTTP_PORT}`);
+    const keyOk = () => safeEqualKey(url.searchParams.get('key'), token);
+
     if (url.pathname === '/' || url.pathname === '/index.html' || url.pathname === '/vnc.html') {
-      if (!safeEqualKey(url.searchParams.get('key'), token)) {
+      if (!keyOk()) {
         res.writeHead(403);
         return res.end();
       }
       res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-store' });
       return res.end(pageHtml(rfbEntry));
+    }
+
+    // ── 頁面輸碼三端點(0.3.5 主路徑;全部驗 key)────────────────────────
+    // 目前的 4 碼驗證碼圖(?refresh=1 先換一張再截)。404=沒有進行中的登入流程,
+    // 頁面據此顯示「開始登入」。
+    if (req.method === 'GET' && url.pathname === '/captcha.png') {
+      if (!keyOk()) { res.writeHead(403); return res.end(); }
+      if (!captcha || !captcha.shot) { res.writeHead(404); return res.end(); }
+      Promise.resolve(captcha.shot({ refresh: url.searchParams.get('refresh') === '1' }))
+        .then((buf) => {
+          if (!buf) { res.writeHead(404); return res.end(); }
+          res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': buf.length, 'Cache-Control': 'no-store' });
+          res.end(buf);
+        })
+        .catch(() => { res.writeHead(500); res.end(); });
+      return;
+    }
+    // 頁面輸碼送出(由中繼瀏覽器代填代送;成敗與原因見 lib/login.js submitCode)
+    if (req.method === 'POST' && url.pathname === '/code') {
+      if (!keyOk()) { res.writeHead(403); return res.end(); }
+      if (!captcha || !captcha.submit) return sendJson(res, 200, { ok: false, reason: 'no-login-in-flight' });
+      readSmallBody(req)
+        .then((body) => Promise.resolve(captcha.submit(body && body.code)))
+        .then((result) => sendJson(res, 200, result || { ok: false, reason: 'submit-error' }))
+        .catch(() => sendJson(res, 200, { ok: false, reason: 'submit-error' }));
+      return;
+    }
+    // 沒有進行中的流程時,讓老闆從這頁直接啟動登入(等同 /collect 的「重新登入遠通」,
+    // 但不用先繞去 /collect)。fire-and-forget,頁面自己輪詢 /captcha.png 等瀏覽器就緒。
+    if (req.method === 'POST' && url.pathname === '/trigger') {
+      if (!keyOk()) { res.writeHead(403); return res.end(); }
+      if (captcha && captcha.trigger) {
+        try { captcha.trigger(); } catch (e) { /* 觸發失敗頁面輪詢自然逾時,不需回錯 */ }
+      }
+      return sendJson(res, 200, { ok: true });
     }
     if (url.pathname.startsWith('/novnc/')) {
       // 這裡**故意不驗 key**:掛的是 @novnc/novnc 套件本身的靜態檔(rfb.js 及其相依模組),
@@ -283,6 +457,11 @@ function startVncServer({ enabled, token }) {
       return socket.destroy();
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
+      // 真人接上畫面的當下換一張新驗證碼(server.js 掛 refreshCaptcha)——觸發登入到
+      // 老闆真的連上中間可能隔幾分鐘,舊圖可能已過期,連上時刷新保證看到的是有效的圖。
+      if (onClientConnect) {
+        try { Promise.resolve(onClientConnect()).catch(() => {}); } catch (e) { /* 不致命 */ }
+      }
       const tcp = net.connect(VNC_TCP_PORT, '127.0.0.1');
       // 斷線診斷(使用者反饋「VNC 連線斷線無診斷」):記下是哪一端先斷、WS close code——
       // 之後排查「連線常斷」才有東西可看,不然只知道「斷了」卻不知道是 x11vnc 端斷的還是
