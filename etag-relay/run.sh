@@ -27,8 +27,10 @@ else
   # 密碼檔存 /data(持久卷),0600 權限;密碼值本身絕不進 log。
   if x11vnc -storepasswd "${VNC_PASSWORD}" /data/.vncpasswd >/dev/null 2>&1; then
     chmod 600 /data/.vncpasswd 2>/dev/null || true
+    # Round G1:拿掉 -quiet——auth 失敗(密碼打錯/連線被拒)必須進 add-on log 才能診斷,
+    # -quiet 會連這些訊息一起吞掉,等於斷線永遠查不出原因。
     x11vnc -display "${DISPLAY}" -forever -shared -rfbauth /data/.vncpasswd \
-      -rfbport 5900 -localhost -noxdamage -quiet &
+      -rfbport 5900 -localhost -noxdamage &
     X11VNC_PID=$!
     echo "[etag-relay] x11vnc 啟動(rfbport 5900,僅 localhost)"
     # noVNC 網頁與 WebSocket 轉發改由 server.js(lib/vnc.js)自己在 :8098 提供,

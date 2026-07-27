@@ -5,9 +5,11 @@ Home Assistant add-on:遠通(FETC)eTag 通行明細中繼服務。
 ## 為什麼需要這個
 
 Gafferland 網站的 Vercel 部署(境外 IP)被遠通電收(FETC)網路層擋(連 `fetc.net.tw`
-都連線逾時),且遠通會員登入需要 4 碼圖形驗證碼(人工)+ reCAPTCHA v3(真瀏覽器自動
-過)。這個 add-on 跑在使用者家中的 Home Assistant(台灣住宅 IP),作為 Vercel
-`cron-etag` 與遠通之間的中繼:
+都連線逾時),且遠通會員登入頁有 4 碼圖形驗證碼 + reCAPTCHA v3。實測結論(Round G1):
+v3 擋的是「自動化瀏覽器觸發送出」這個動作本身,不論 4 碼是誰填的都一樣判定成機器人——
+因此登入唯一路徑是老闆本人透過 noVNC 遠端畫面,親手操作中繼容器裡的瀏覽器完成登入。這個
+add-on 跑在使用者家中的 Home Assistant(台灣住宅 IP),作為 Vercel `cron-etag` 與遠通
+之間的中繼:
 
 ```
 Vercel cron-etag ──(Cloudflare Tunnel + Access)──▶ etag-relay(HA)──▶ fetc.net.tw
@@ -38,15 +40,14 @@ etag-relay/
 
 ## API
 
-所有端點皆為 `POST`/`GET` JSON,除了 `/cap/{token}.png`(回 PNG)。
+所有端點皆為 `POST`/`GET` JSON。
 
 | 端點 | 驗證 | 說明 |
 |---|---|---|
 | `POST /query` | `X-Relay-Secret` | `{plate, startDate, endDate}` → `{ok, transactions, total, printHtml}`;session 失效回 `{ok:false, reason:'session-expired'}` |
-| `GET /health` | `X-Relay-Secret` | `{ok, sessionValid, lastKeepAlive}` |
+| `GET /health` | `X-Relay-Secret` | `{ok, sessionValid, lastKeepAlive, vncUrl, ...}`(`vncUrl` 是帶 token 的 noVNC 完整連結) |
+| `POST /login` | `X-Relay-Secret` | 手動觸發登入流程(唯一路徑=真人 noVNC);`{ok, started, inFlight, mode:'manual'}` |
 | `POST /session` | `X-Relay-Secret` | 內部用:登入流程寫回 session cookie |
-| `POST /captcha` | `X-Relay-Secret`(`RELAY_SECRET` 或 `VERCEL_CALLBACK_SECRET` 皆可) | Vercel line-webhook 轉發老闆回的 4 碼:`{loginId, code}` |
-| `GET /cap/{token}.png` | **不驗密鑰**(Cloudflare Access 例外放行) | 回目前 pending 登入的驗證碼截圖,供 LINE 抓圖 |
 
 ## 認證機制(遠通端)
 

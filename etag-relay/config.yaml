@@ -1,5 +1,10 @@
 name: "eTag Relay v3"
-version: "0.3.3"
+version: "0.3.4"
+# 0.3.4(Round G1/G1b):徹底取消軌道 A(LINE 推 4 碼圖→自動送出,v3 一律判定機器人擋死)、
+# Dockerfile 補裝真 Google Chrome(v3 指紋分數)、noVNC 入口拿掉 Cloudflare Access 改
+# 「連結內建長亂數 token + VNC 密碼」兩層、無 session 自動觸發登入加 1 小時通知冷卻
+# (避免 keep-alive 反覆開瀏覽器常駐 + LINE 洗版)、修 keep-alive 抱舊 jar closure 導致
+# 保溫從未生效的根因(session 17 分鐘就失效)。
 slug: "etag_relay_v3"
 # ⚠ 2026-07-27 slug 由 etag_relay 改為 etag_relay_v2:HA Supervisor 有一筆昨晚 docker build
 # 卡死的 docker_addon_install 工作(done:false)永久握著 addon_c90d9894_etag_relay 的工作群組鎖,

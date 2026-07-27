@@ -26,6 +26,15 @@ RUN npm install --omit=dev --no-audit --no-fund
 RUN npx playwright install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/*
 
+# Round G1:補裝真 Google Chrome——reCAPTCHA v3 分數吃的是瀏覽器指紋(User-Agent/plugin
+# 列表/版本字串等),即使登入已改成真人在 noVNC 手動操作,用 bundled Chromium 一樣可能被
+# 判定成自動化工具而拉低分數。裝失敗不擋 build(lib/login.js 的 launchPersistentContext
+# 已有 catch,沒有真 Chrome 就 fallback 回 chromium),但這行 echo 會留在 Actions build
+# log 裡,方便事後發現裝失敗。
+RUN npx playwright install --with-deps chrome \
+    && rm -rf /var/lib/apt/lists/* \
+    || echo "[build] Google Chrome 安裝失敗,執行時將 fallback chromium(login.js 已有 catch)"
+
 # xvfb 虛擬螢幕(headed chromium 用)＋x11vnc(noVNC 遠端登入)＋
 # CJK 字型(**必要**:遠通登入頁是中文,少了字型在 noVNC 只會看到一堆方框,人根本沒辦法操作)。
 RUN apt-get update \
