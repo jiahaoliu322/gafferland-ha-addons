@@ -1,5 +1,9 @@
 name: "eTag Relay v3"
-version: "0.3.6"
+version: "0.3.7"
+# 0.3.7(Round H1 修正):使用者 DevTools 實查發現列印是**會員頁彈窗**不是獨立頁——
+# 下載鈕 a.btn-download-pdf 屬會員頁骨架,0.3.6 表單導航拿到的裸片段上根本沒有按鈕。
+# 改照遠通自己的流程:進會員頁→頁內 XHR(token 放 header)拿列印片段→塞進 #printDetail
+# 彈窗→打開→按真正的下載鈕攔截 download;0.3.6 的導航+page.pdf() 降為 fallback。
 # 0.3.6(Round H1):新端點 /print——中繼開 headless chromium 進遠通「真」列印頁(表單 POST
 # 真站台,絕不 setContent 塞自家 HTML)、按遠通自己的「下載PDF文件」按鈕攔截 download,
 # 取得有文字層、天然含 CJK 的原生 PDF(鐵則:PDF 是收款憑證,必須遠通自己生成——修正
