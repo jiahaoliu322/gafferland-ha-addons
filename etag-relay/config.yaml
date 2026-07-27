@@ -1,5 +1,10 @@
 name: "eTag Relay v3"
-version: "0.3.7"
+version: "0.3.8"
+# 0.3.8(Round H1 終局):逆向列印頁 inline script 發現「下載PDF文件」真身=前端把列印頁
+# DOM 打包 base64 POST 到遠通 /UX0000Common/UX000006GetPDF,**由遠通伺服器生成 PDF**
+# (含電子憑證專用章/文字層)。/print 改純 HTTP 復刻同一打包(已用真 session 實測過
+# application/pdf 回應),不再開瀏覽器;移除所有自家渲染 fallback(寧可沒 PDF 也不掛
+# 非原生件上憑證欄);lib/print-pdf.js 移除。
 # 0.3.7(Round H1 修正):使用者 DevTools 實查發現列印是**會員頁彈窗**不是獨立頁——
 # 下載鈕 a.btn-download-pdf 屬會員頁骨架,0.3.6 表單導航拿到的裸片段上根本沒有按鈕。
 # 改照遠通自己的流程:進會員頁→頁內 XHR(token 放 header)拿列印片段→塞進 #printDetail

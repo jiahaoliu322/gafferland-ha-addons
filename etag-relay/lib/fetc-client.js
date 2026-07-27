@@ -28,8 +28,7 @@ const TOKEN_SOURCE_PATH = '/Member/Setting';
 // 會員主頁車輛清單(2026-07-27 活 session 實測):車輛卡 .swiper-slide[data-cin][data-cln]。
 const MEMBER_VEHICLES_PATH = '/Member';
 
-// 列印端點路徑——print()(純 HTTP)與 Round H1 lib/print-pdf.js(開真瀏覽器 POST 同一張表單
-// 進真列印頁)都要用到,拉成常數避免兩處字面字串日後改一邊漏另一邊。
+// 列印端點路徑(print() 用;0.3.8 起 PDF 亦全純 HTTP,見檔尾 generateNativePdf)。
 const PRINT_PATH = '/UX0505Traffic/UX050508TrafficAdvancedSearchPrint';
 
 // ── Cookie jar ───────────────────────────────────────────────────────────
@@ -372,9 +371,9 @@ async function inlinePrintAssets(html, jar) {
 // 回 { transactions, total, printHtml, searchHtml }(printHtml 已是自包含 HTML)。
 // 供 server.js /query 路由呼叫;session 失效時各步驟會 throw code=SESSION_EXPIRED,
 // 由呼叫端 catch 轉成 {ok:false, reason:'session-expired'}。
-// opts.skipPrint(Round H1):PDF 現在改由 /print 端點另開真瀏覽器、按遠通原生下載鈕產生
-// (lib/print-pdf.js)——/query 若只是要 transactions/total,印一次遠通 print 端點純屬
-// 浪費(多一次遠通呼叫+inline 資產動輒 2MB),true 時整段跳過,printHtml 回 null。
+// opts.skipPrint(Round H1):PDF 改由 /print 端點(0.3.8 純 HTTP 遠通伺服器原生件)產生
+// ——/query 若只是要 transactions/total,印一次遠通 print 端點純屬浪費(多一次遠通呼叫+
+// inline 資產動輒 2MB),true 時整段跳過,printHtml 回 null。
 async function queryAll(jar, { plate, cin, startDate, endDate }, opts = {}) {
   const { skipPrint = false } = opts;
   const fieldToken = await getAntiForgeryToken(jar);
@@ -408,7 +407,7 @@ async function queryAll(jar, { plate, cin, startDate, endDate }, opts = {}) {
 }
 
 // 供 /print 端點用:純 HTTP 準備「只含 times 子集」的 dateTimeMap,不呼叫 print 端點本身
-// (PDF 這步交給 lib/print-pdf.js 開真瀏覽器做)。times = 呼叫端(Vercel 配對命中的門架時間戳)
+// (print/PDF 兩步由 /print handler 接續呼叫)。times = 呼叫端(Vercel 配對命中的門架時間戳)
 // 想收款的子集,格式與 /query 回應 transactions[].timeStr 相同('yyyy/MM/dd HH:mm:ss')。
 // 逐批 detail 拿到的每列 g.timeStr 只要在 timesSet 內就收進該 batchId 底下——這正是「PDF
 // 不可混入租期外通行紀錄」鐵則在資料層的落地:送進遠通列印端點的 dateTimeJSON 從一開始
@@ -439,6 +438,59 @@ async function buildDateTimeMapForTimes(jar, { plate, cin, startDate, endDate, t
   return { dateTimeMap, fieldToken };
 }
 
+// ── 遠通伺服器端原生 PDF(0.3.8;Round H1 終局)──────────────────────────
+// 「下載PDF文件」按鈕的真身(2026-07-27 逆向列印頁 inline script 證實):前端 downloadPdf()
+// 把列印頁 DOM 剝掉 script/pre、URL 絕對化、包成完整 HTML 後 base64,POST 到
+// /UX0000Common/UX000006GetPDF——**由遠通伺服器生成 PDF 回傳**(含電子憑證專用章、
+// 文字層)。所以原生件根本不需要瀏覽器:純 HTTP 復刻同一包裝即可。
+// 已用真 session 實測:回應 application/pdf、%PDF-1.4、版式=官方 Report 同模。
+const GETPDF_PATH = '/UX0000Common/UX000006GetPDF';
+
+// 復刻列印頁 downloadPdf() 的內容打包(順序/取代規則一字不差照抄,別「優化」——
+// 伺服器端怎麼解析我們不知道,跟瀏覽器送的長一樣才是最穩的):
+// 移除 script/pre → head 內所有 href="/src=" 前面補站台 → body 內 src="/(單斜線)補站台
+// → 重組 <!DOCTYPE html><html lang="zh-TW">…。
+function buildPdfContentFromPrintHtml(printHtml) {
+  let s = String(printHtml)
+    .replace(/<script\b[\s\S]*?<\/script>/gi, '')
+    .replace(/<pre\b[\s\S]*?<\/pre>/gi, '');
+  const headM = s.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
+  const bodyM = s.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  let head = headM ? headM[1] : '';
+  let body = bodyM ? bodyM[1] : s;
+  head = head.replace(/href="/gi, 'href="' + BASE).replace(/src="/gi, 'src="' + BASE);
+  body = body.replace(/src="\/(?!\/)/gi, 'src="' + BASE + '/');
+  return '<!DOCTYPE html><html lang="zh-TW"><head>' + head + '</head><body>' + body + '</body></html>';
+}
+
+// printHtml(print() 的**原始**回應,不可用 inline 過的——script 剝法/URL 形態要與
+// 瀏覽器端一致)→ 遠通伺服器生成的 PDF Buffer。非 PDF 回應一律 throw(PDF_FAILED)。
+async function generateNativePdf(jar, fieldToken, printHtml) {
+  const html = buildPdfContentFromPrintHtml(printHtml);
+  const content = Buffer.from(html, 'utf-8').toString('base64');
+  // ?&r=<ts> 照抄 Portal.Common.SendToURL(避免快取的網址加鹽)
+  const resp = await fetch(BASE + GETPDF_PATH + '?&r=' + Date.now(), {
+    method: 'POST',
+    redirect: 'follow',
+    headers: {
+      'User-Agent': UA,
+      Cookie: jar.header(),
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Referer: BASE + '/Member',
+    },
+    body: formBody({ content, __RequestVerificationToken: fieldToken }),
+  });
+  jar.ingest(resp.headers);
+  const buf = Buffer.from(await resp.arrayBuffer());
+  const ct = resp.headers.get('content-type') || '';
+  if (!resp.ok || buf.subarray(0, 5).toString() !== '%PDF-') {
+    const err = new Error(`GetPDF 回應非 PDF(status=${resp.status}, type=${ct}, size=${buf.length})`);
+    err.code = 'PDF_FAILED';
+    throw err;
+  }
+  return buf;
+}
+
 module.exports = {
   CookieJar,
   getAntiForgeryToken,
@@ -448,6 +500,7 @@ module.exports = {
   resolveCin,
   queryAll,
   buildDateTimeMapForTimes,
+  generateNativePdf,
   inlinePrintAssets,
   looksLikeLoginRedirect,
   extractFieldToken,

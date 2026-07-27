@@ -3,9 +3,10 @@
 // 路由(Round G1 起,軌道 A/LINE 4 碼流程整條移除,唯一登入路徑=真人 noVNC):
 //   POST /query   (驗 X-Relay-Secret)  三步查詢鏈 → 回 transactions/total/printHtml
 //                                       (body.skipPrint:true 省最後 print 步驟,見下)
-//   POST /print   (驗 X-Relay-Secret)  Round H1:開真瀏覽器進遠通真列印頁、按其原生下載鈕
-//                                       取得有文字層/含 CJK 的 PDF(鐵則:PDF 是收款憑證,
-//                                       必須是遠通自己生成的檔案)→ 回 pdfBase64
+//   POST /print   (驗 X-Relay-Secret)  Round H1(0.3.8 終局):純 HTTP 復刻站方「下載PDF
+//                                       文件」打包,POST 遠通 UX000006GetPDF 由**遠通伺服器**
+//                                       生成原生 PDF(鐵則:PDF 是收款憑證,必須是遠通自己
+//                                       生成的檔案)→ 回 pdfBase64(via:'fetc-native')
 //   GET  /health  (驗 X-Relay-Secret)  存活 + session 有效性 + noVNC 連結(vncUrl)
 //   POST /login   (驗 X-Relay-Secret)  手動觸發登入流程(不必等 cron/keep-alive 撞失效)
 //   POST /session (內部用)             登入流程寫回 session cookie(貼 cookie 終極備援)
@@ -17,7 +18,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const { CookieJar, resolveCin, queryAll, buildDateTimeMapForTimes } = require('./lib/fetc-client');
+const { CookieJar, resolveCin, queryAll, buildDateTimeMapForTimes, print, generateNativePdf } = require('./lib/fetc-client');
 
 // ── 設定(HA add-on options 由 supervisor 注入 /data/options.json,本機開發
 // 則走環境變數 fallback,方便未部署前先 `node server.js` 對語法/路由 smoke test)──
@@ -299,9 +300,10 @@ async function handleQuery(req, res) {
   }
 }
 
-// Round H1:憑遠通自己的列印頁 + 下載按鈕產生 PDF(見 lib/print-pdf.js 檔頭鐵則說明)。
+// Round H1(0.3.8 終局):純 HTTP 復刻遠通「下載PDF文件」打包,由遠通伺服器端點生成
+// 原生 PDF(見 lib/fetc-client.js generateNativePdf 檔頭說明)。
 // 回應契約(Vercel 端按此實作,務必勿改):
-//   成功 {ok:true, pdfBase64, via:'fetc-button'|'page-pdf', printTotal}
+//   成功 {ok:true, pdfBase64, via:'fetc-native', printTotal}
 //   失敗 {ok:false, reason:'no-rows'|'session-expired'|'pdf-failed'}
 // times = Vercel 配對命中、要收款的門架時間戳子集('yyyy/MM/dd HH:mm:ss',與 /query
 // 回應 transactions[].timeStr 同格式)——這正是「PDF 不可混入租期外通行紀錄」鐵則在
@@ -340,18 +342,30 @@ async function handlePrint(req, res) {
       return sendJson(res, 200, { ok: false, reason: 'no-rows' });
     }
 
-    // lazy require(同 lib/login.js 慣例):平時查詢全是純 HTTP,不必每次啟動都載入
-    // playwright 這種重量級模組。
-    const { renderPrintPdf } = require('./lib/print-pdf');
-    const result = await renderPrintPdf({ jar, plate, cin, dateTimeMap, fieldToken });
-    if (!result.ok) {
-      return sendJson(res, 200, { ok: false, reason: result.reason || 'pdf-failed' });
-    }
+    // 0.3.8:純 HTTP 全程——print 拿原始列印 HTML → 復刻站方打包 → 遠通伺服器端點
+    // 生成原生 PDF(含電子憑證章/文字層)。不再開瀏覽器,也**不做任何自家渲染 fallback**:
+    // 寧可沒 PDF(Vercel 記 pdfError、列照寫,之後可還原重出),也不要把非原生件掛上
+    // 客戶的收款憑證欄。
+    const printHtml = await print(jar, fieldToken, { plate, cin, dateTimeMap });
+    saveSession();
+
+    // printTotal 供 Vercel 端與彙總金額對數(取不到不擋)
+    let printTotal = null;
+    try {
+      const { parsePrintRows, parseAmount } = require('./lib/parse');
+      const { total } = parsePrintRows(printHtml);
+      if (total && total.toll) {
+        const amt = parseAmount(total.toll);
+        if (Number.isFinite(amt)) printTotal = amt;
+      }
+    } catch (e) { /* 對數輔助欄位,解析失敗回 null */ }
+
+    const pdfBuffer = await generateNativePdf(jar, fieldToken, printHtml);
     return sendJson(res, 200, {
       ok: true,
-      pdfBase64: result.pdfBase64,
-      via: result.via,
-      printTotal: result.printTotal,
+      pdfBase64: pdfBuffer.toString('base64'),
+      via: 'fetc-native',
+      printTotal,
     });
   } catch (e) {
     if (e && e.code === 'SESSION_EXPIRED') {
