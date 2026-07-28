@@ -105,7 +105,10 @@ async function submitCode(code) {
     return { ok: false, reason: 'no-login-in-flight' };
   }
   if (!/^\d{4}$/.test(String(code || ''))) return { ok: false, reason: 'bad-code' };
-  if (webAttempts >= WEB_ATTEMPT_MAX) return { ok: false, reason: 'too-many-attempts' };
+  if (webAttempts >= WEB_ATTEMPT_MAX) {
+    console.warn(`[login] 頁面輸碼已達 ${WEB_ATTEMPT_MAX} 次上限,本流程不再代送(防帳號鎖;請改走 noVNC 真人操作)`);
+    return { ok: false, reason: 'too-many-attempts' };
+  }
   webAttempts += 1;
 
   try {
@@ -116,6 +119,7 @@ async function submitCode(code) {
     // 頁面原生送出(grecaptcha v3 + AJAX);點含 sForm2 的送出連結
     await page.click("a[onclick*=\"'sForm2'\"]");
   } catch (e) {
+    console.warn(`[login] 頁面輸碼代送失敗(第 ${webAttempts}/${WEB_ATTEMPT_MAX} 次,submit-error):`, e && e.message);
     return { ok: false, reason: 'submit-error' };
   }
 
@@ -134,10 +138,15 @@ async function submitCode(code) {
     if (activeCtx && activeCtx.loginResponse && /isSucceed"?\s*:\s*false/i.test(activeCtx.loginResponse)) {
       const m = activeCtx.loginResponse.match(/errorMessage"?\s*:\s*"([^"]{0,80})"/);
       activeCtx.loginResponse = null; // 一次性:別讓下一輪嘗試讀到上一輪的舊回應
-      return { ok: false, reason: 'fetc-rejected', message: m ? m[1] : '遠通回覆登入失敗' };
+      const msg = m ? m[1] : '遠通回覆登入失敗';
+      // 0.3.13:失敗一律落 add-on 日誌(遠通原話,不含帳密/碼值)——2026-07-28 使用者回報
+      // 「輸碼都失敗」時日誌全空無從診斷,只能事後猜是 v3 分數波動還是碼錯。
+      console.warn(`[login] 頁面輸碼被遠通拒絕(第 ${webAttempts}/${WEB_ATTEMPT_MAX} 次): ${msg}`);
+      return { ok: false, reason: 'fetc-rejected', message: msg };
     }
     await new Promise((r) => setTimeout(r, 500));
   }
+  console.warn(`[login] 頁面輸碼送出後 45s 未見成功/失敗回應(第 ${webAttempts}/${WEB_ATTEMPT_MAX} 次,timeout)`);
   return { ok: false, reason: 'timeout' };
 }
 
