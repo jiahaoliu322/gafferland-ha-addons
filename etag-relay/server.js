@@ -514,10 +514,27 @@ if (require.main === module) {
     console.log(`[etag-relay] listening on :${PORT}`);
     if (options.FETC_ACCOUNT) {
       scheduleKeepAlive(); // 有帳密才有意義跑 keep-alive
-      // 首次啟動若無 session(空 jar,首次部署或存檔遺失)也觸發一次登入,不必等 10 分 keep-alive
-      if (Object.keys(jar.toObject()).length === 0) {
-        triggerLogin('startup-no-session');
-      }
+      // 0.3.12(使用者裁示):啟動即驗一次 session——keep-alive 是 setInterval,第一次檢查在
+      // 啟動後 10 分鐘;重啟後的失效盲區(session 已死卻要空等 10 分鐘才收到登入連結)靠這裡補。
+      // 與 keep-alive 同一把尺(getAntiForgeryToken);空 jar 天然驗不過,涵蓋舊
+      // 'startup-no-session'(僅驗 jar 空)情境。失效觸發登入(自動觸發受通知冷卻約束,
+      // 但 lastManualNotifyAt 重啟歸零,重啟後首次通知必發)。
+      (async () => {
+        try {
+          const { getAntiForgeryToken } = require('./lib/fetc-client');
+          const token = await getAntiForgeryToken(jar);
+          if (token) {
+            sessionMeta.lastKeepAlive = Date.now();
+            saveSession();
+            console.log('[etag-relay] 啟動 session 檢查:有效');
+            return;
+          }
+          console.warn('[etag-relay] 啟動 session 檢查:失效,觸發登入');
+        } catch (e) {
+          console.warn('[etag-relay] 啟動 session 檢查異常(視為失效,觸發登入):', e && e.message);
+        }
+        triggerLogin('startup-session-invalid');
+      })();
     }
   });
 }

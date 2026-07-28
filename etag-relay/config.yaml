@@ -1,5 +1,8 @@
 name: "eTag Relay v3"
-version: "0.3.11"
+version: "0.3.12"
+# 0.3.12:啟動即驗一次 session(使用者裁示)——原本只在「jar 全空」時觸發啟動登入,session
+# 存在但已死(如遠通夜間砍 session 後重啟/更新 add-on)要空等 10 分鐘 keep-alive 首查;改為
+# 啟動一律用 getAntiForgeryToken 真驗證:有效靜默記保溫,失效立即觸發登入流程。
 # 0.3.11:登入通知冷卻 1 小時 → 2 小時(使用者裁示;session 失效期間 🔐 連結最短間隔)。
 # 配套:Vercel 端 etag-captcha success 回呼新增「已過當日 06:50 排程即自動補跑 eTag 結算」。
 # 0.3.10(Round J 緊急修):profile 快路徑「假成功」死循環——遠通 server 端砍 session 後,
