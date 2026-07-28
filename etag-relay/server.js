@@ -205,7 +205,8 @@ function triggerLogin(reason) {
   // 冷卻(Round G1):無 session 時 keep-alive 每 10 分觸發一次,若不冷卻,瀏覽器會一路
   // 開著等到 manualTtlMs 逾時才關(CPU/RAM 常駐 ~5%),LINE 也會被同一件事洗版。
   // 'manual-request' 是 /collect 的手動按鈕,老闆主動要求不受冷卻限制。
-  const cooldownMs = 60 * 60 * 1000;
+  // 2 小時=2026-07-28 使用者裁示(原 1 小時;session 死著的期間每則 🔐 的最短間隔)。
+  const cooldownMs = 2 * 60 * 60 * 1000;
   if (reason !== 'manual-request' && Date.now() - lastManualNotifyAt < cooldownMs) {
     const minutesAgo = Math.round((Date.now() - lastManualNotifyAt) / 60000);
     console.log(`[etag-relay] 冷卻中(上次通知 ${minutesAgo} 分鐘前),略過自動觸發(reason=${reason})`);

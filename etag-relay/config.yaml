@@ -1,5 +1,7 @@
 name: "eTag Relay v3"
-version: "0.3.10"
+version: "0.3.11"
+# 0.3.11:登入通知冷卻 1 小時 → 2 小時(使用者裁示;session 失效期間 🔐 連結最短間隔)。
+# 配套:Vercel 端 etag-captcha success 回呼新增「已過當日 06:50 排程即自動補跑 eTag 結算」。
 # 0.3.10(Round J 緊急修):profile 快路徑「假成功」死循環——遠通 server 端砍 session 後,
 # 死 FETC_P cookie 仍留在持久 profile,0.3.9 以前只驗 cookie 存在即宣告登入成功(不問遠通),
 # 造成 keep-alive 每 10 分鐘偵測失效→觸發登入→假成功→LINE「✅ via profile」洗版,手動觸發
