@@ -1,5 +1,10 @@
 name: "eTag Relay v3"
-version: "0.3.9"
+version: "0.3.10"
+# 0.3.10(Round J 緊急修):profile 快路徑「假成功」死循環——遠通 server 端砍 session 後,
+# 死 FETC_P cookie 仍留在持久 profile,0.3.9 以前只驗 cookie 存在即宣告登入成功(不問遠通),
+# 造成 keep-alive 每 10 分鐘偵測失效→觸發登入→假成功→LINE「✅ via profile」洗版,手動觸發
+# 也被短路。改用與 keep-alive 同一把尺(getAntiForgeryToken)真驗證;失敗清 fetc 網域 cookie
+# (保留 Google/_GRECAPTCHA v3 信譽 cookie)+重載首頁,走真人登入流程。
 # 0.3.9(目標 19 收尾):純註解清理——E0/E1 時代「待活 session 驗證」TODO 全數改為已實測定案
 # 註記(TOKEN_SOURCE_PATH/登入導回啟發式/resolveCin 車輛卡結構)。無任何功能變更,不需急著更新。
 # 0.3.8(Round H1 終局):逆向列印頁 inline script 發現「下載PDF文件」真身=前端把列印頁

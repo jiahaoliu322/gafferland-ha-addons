@@ -249,12 +249,34 @@ async function startLogin({ account, password, profileDir, vncUrl, manualTtlMs, 
     await page.goto(HOME_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
     // 持久 profile 的最大紅利:重啟後 FETC_P 可能還在(遠通登入態存活)→ 完全不需要重新登入。
+    // ⚠ 0.3.10:cookie 存在 ≠ session 活著——遠通 server 端作廢 session 後,cookie 本體仍留在
+    // 持久 profile 裡。0.3.9 以前只驗存在就宣告成功,造成「假成功→keep-alive 又偵測失效→再假
+    // 成功」每 10 分鐘 LINE ✅ 洗版死循環,且手動觸發同樣被短路、真登入頁永遠開不起來。
+    // 改用與 keep-alive 同一把尺(getAntiForgeryToken)向遠通真驗證;失敗(含網路錯誤,保守
+    // 視為失效)則清 fetc 網域 cookie 走真人登入——不清的話,下方真人輪詢(驗 FETC_P 存在)
+    // 也會被殘留的死 cookie 立即誤判成功。只清 fetc 網域:Google/_GRECAPTCHA 的 v3 信譽
+    // cookie 是持久 profile 的核心價值,絕不可全清。
     const existingCookies = await context.cookies();
     if (existingCookies.some((c) => c.name === 'FETC_P' && c.value)) {
-      console.log(`[login] profile 已登入,略過登入流程(via=profile,loginId=${loginId})`);
-      lastFlowResult = 'success';
-      await context.close().catch(() => {});
-      return { cookies: existingCookies, via: 'profile', loginId };
+      const { CookieJar, getAntiForgeryToken } = require('./fetc-client');
+      let aliveToken = null;
+      try {
+        const asObj = {};
+        for (const c of existingCookies) asObj[c.name] = c.value;
+        aliveToken = await getAntiForgeryToken(new CookieJar(asObj));
+      } catch (e) {
+        aliveToken = null;
+      }
+      if (aliveToken) {
+        console.log(`[login] profile 已登入(遠通驗證通過),略過登入流程(via=profile,loginId=${loginId})`);
+        lastFlowResult = 'success';
+        await context.close().catch(() => {});
+        return { cookies: existingCookies, via: 'profile', loginId };
+      }
+      console.log(`[login] profile 有 FETC_P 但遠通驗證失敗(session 已死),清除 fetc cookie 走真人登入(loginId=${loginId})`);
+      await context.clearCookies({ domain: /fetc\.net\.tw/i }).catch((e) => console.warn('[login] 清除 fetc cookie 失敗(續走真人流程):', e && e.message));
+      // 重載未登入版首頁:openLoginForm 是在當前頁面上開登入彈窗,舊(染色)首頁可能沒有登入入口。
+      await page.goto(HOME_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
     }
 
     await openLoginForm(page, account, password);
