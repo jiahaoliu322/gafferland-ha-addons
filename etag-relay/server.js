@@ -36,7 +36,7 @@ try {
     PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL || '',
     VNC_PASSWORD: process.env.VNC_PASSWORD || '',
     VNC_PUBLIC_URL: process.env.VNC_PUBLIC_URL || '',
-    MANUAL_LOGIN_TTL_MIN: process.env.MANUAL_LOGIN_TTL_MIN || 15,
+    MANUAL_LOGIN_TTL_MIN: process.env.MANUAL_LOGIN_TTL_MIN || 8,
   };
 }
 
@@ -49,7 +49,7 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 // ── session 持久化(跨重啟)───────────────────────────────────────────────
 // 存的只有 cookie 名稱/值(session token 本身),不含帳密。
 let jar = new CookieJar();
-let sessionMeta = { lastKeepAlive: null, plateCinCache: {} };
+let sessionMeta = { lastKeepAlive: null, plateCinCache: {}, lastNotifyDate: null };
 
 // noVNC 入口的 URL token(見 lib/vnc.js loadVncToken)。由下方 require.main 啟動段填入;
 // 未跑到那段(如未來 require 這個模組來測試)則維持 null,buildVncUrl() 因此回 null——
@@ -63,6 +63,8 @@ function loadSession() {
     sessionMeta = {
       lastKeepAlive: raw.lastKeepAlive || null,
       plateCinCache: raw.plateCinCache || {},
+      // 0.4.0:最後一次推播登入連結的台北日期——落檔才能做到「重啟也不重推同一天」。
+      lastNotifyDate: raw.lastNotifyDate || null,
     };
   } catch (e) {
     // 無存檔(首次啟動)或壞檔 → 空 session,等登入流程寫入
@@ -74,6 +76,7 @@ function saveSession() {
     cookies: jar.toObject(),
     lastKeepAlive: sessionMeta.lastKeepAlive,
     plateCinCache: sessionMeta.plateCinCache,
+    lastNotifyDate: sessionMeta.lastNotifyDate,
   };
   fs.writeFileSync(SESSION_FILE, JSON.stringify(payload), { mode: 0o600 });
 }
@@ -142,9 +145,12 @@ function requireSecret(req, res, expected) {
 // 由 lib/login.js 天然成立(整條流程沒有自動送出這一步,唯一送出動作是真人在 noVNC 裡
 // 自己按的)。
 let loginInFlight = null;
-let lastManualNotifyAt = 0; // 上次成功送出 mode:'manual' 通知的時間(module-level;初始 0
-// 代表「還沒通知過」,配合下方 triggerLogin() 的冷卻判斷——Date.now() - 0 天然是個很大的
-// 數字,不會誤判成冷卻中)。
+
+// 台北日期字串(yyyy-mm-dd)——每日一則通知的判斷基準(0.4.0 使用者裁示)。台灣無日光節約,
+// 直接 UTC+8 再取 ISO 前 10 碼即可,不用本地時區解析(沿用全站牆鐘慣例)。
+function taipeiDateStr() {
+  return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+}
 
 // 組出帶 token 的 noVNC 完整連結,供通知 Vercel(老闆從 LINE 點連結進 noVNC)與 /health
 // (Vercel staff API 用)回應——沒有 Cloudflare Access 保護 8098 這層之後,這個 URL 本身
@@ -179,10 +185,12 @@ async function notifyVercel(payload) {
       console.warn(`[etag-relay] 通知 Vercel 失敗(mode=${payload && payload.mode}):HTTP ${resp.status}`);
       return;
     }
-    // 只有成功送出 mode:'manual' 才記時間——冷卻窗口的起點是「老闆已經被通知過一次」,
-    // 失敗的通知等於沒通知到,不該因此讓下一次自動觸發也被冷卻吃掉。
+    // 只有成功送出 mode:'manual' 才記日期——「每日一則」的起點是「老闆今天已經被通知過」,
+    // 失敗的通知等於沒通知到,不該因此吃掉今天唯一的額度。**日期落檔 session.json**:
+    // add-on 重啟不會重推同一天(0.3.x 用 in-memory 時間戳,重啟即歸零 → 重推)。
     if (payload && payload.mode === 'manual') {
-      lastManualNotifyAt = Date.now();
+      sessionMeta.lastNotifyDate = taipeiDateStr();
+      saveSession();
     }
   } catch (e) {
     console.warn(`[etag-relay] 通知 Vercel 例外(mode=${payload && payload.mode}):`, e && e.message);
@@ -192,8 +200,36 @@ async function notifyVercel(payload) {
 // 觸發一次登入流程(不 await 完成——呼叫端 fire-and-forget,結果透過 saveSession 落地、
 // 下次查詢自然吃到新 session)。reason 只供 log 分類,絕不含帳密。
 // 唯一登入路徑=真人 noVNC(Round G1 起不再有 mode 參數)。
-function triggerLogin(reason) {
-  if (loginInFlight) {
+// 0.4.0 架構反轉:**自動偵測到 session 失效不再開瀏覽器**,只推一則通知(每日一則)。
+// 原因(2026-07-30 使用者實測):凌晨 4 點偵測到失效就開瀏覽器填好帳密等真人,中午才點連結
+// 的人看到的是放了 8 小時的頁面與驗證碼(v3 情境早過期,送出必被擋),而瀏覽器整晚常駐把
+// Xvfb/x11vnc 拖到很卡。改成「人到了才開」:通知 → 使用者點登入頁 → POST /trigger 起流程 →
+// 驗證碼從產生到送出壓在幾十秒內。
+function noteSessionDead(reason) {
+  const today = taipeiDateStr();
+  if (sessionMeta.lastNotifyDate === today) {
+    console.log(`[etag-relay] session 失效(reason=${reason});今日已通知過,不重複推播`);
+    return Promise.resolve();
+  }
+  const vncUrl = buildVncUrl();
+  if (!vncUrl) {
+    console.warn(`[etag-relay] session 失效(reason=${reason})但 VNC_PUBLIC_URL/token 未就緒,無法給登入連結`);
+    return Promise.resolve();
+  }
+  console.log(`[etag-relay] session 失效(reason=${reason}),推播今日登入連結(不開瀏覽器,等使用者開頁面)`);
+  return notifyVercel({
+    mode: 'manual',
+    loginId: 'on-demand',
+    vncUrl,
+    ttlMin: Number(options.MANUAL_LOGIN_TTL_MIN) || 8,
+  });
+}
+
+// 觸發登入流程(0.4.0 起只由「人在登入頁按開始登入」或 /collect 手動按鈕呼叫;自動偵測走
+// noteSessionDead)。opts.force=先中止進行中的舊流程再起新的(頁面偵測到 ageSec 過大、或
+// 上一次送出被遠通拒 → 換一個全新頁面/全新 v3 情境重來)。
+function triggerLogin(reason, opts = {}) {
+  if (loginInFlight && !opts.force) {
     console.log(`[etag-relay] 登入流程已在進行中,略過重複觸發(reason=${reason})`);
     return loginInFlight;
   }
@@ -202,27 +238,24 @@ function triggerLogin(reason) {
     return Promise.resolve();
   }
 
-  // 冷卻(Round G1):無 session 時 keep-alive 每 10 分觸發一次,若不冷卻,瀏覽器會一路
-  // 開著等到 manualTtlMs 逾時才關(CPU/RAM 常駐 ~5%),LINE 也會被同一件事洗版。
-  // 'manual-request' 是 /collect 的手動按鈕,老闆主動要求不受冷卻限制。
-  // 2 小時=2026-07-28 使用者裁示(原 1 小時;session 死著的期間每則 🔐 的最短間隔)。
-  const cooldownMs = 2 * 60 * 60 * 1000;
-  if (reason !== 'manual-request' && Date.now() - lastManualNotifyAt < cooldownMs) {
-    const minutesAgo = Math.round((Date.now() - lastManualNotifyAt) / 60000);
-    console.log(`[etag-relay] 冷卻中(上次通知 ${minutesAgo} 分鐘前),略過自動觸發(reason=${reason})`);
-    return Promise.resolve();
-  }
-
-  console.log(`[etag-relay] 觸發登入流程(reason=${reason})`);
-  const { startLogin } = require('./lib/login');
-  loginInFlight = startLogin({
-    account: options.FETC_ACCOUNT,
-    password: options.FETC_PASSWORD,
-    profileDir: path.join(DATA_DIR, 'chrome-profile'),
-    vncUrl: buildVncUrl(),
-    manualTtlMs: (Number(options.MANUAL_LOGIN_TTL_MIN) || 15) * 60 * 1000,
-    onNotify: notifyVercel,
-  })
+  console.log(`[etag-relay] 觸發登入流程(reason=${reason}${opts.force ? ',force' : ''})`);
+  const { startLogin, abortLogin } = require('./lib/login');
+  const prev = opts.force && loginInFlight ? loginInFlight : null;
+  let mine;
+  mine = (async () => {
+    if (opts.force) {
+      await abortLogin().catch(() => {});
+      if (prev) await prev.catch(() => {});   // 等舊流程收乾淨(它會以 flow-ended 結束)
+    }
+    return startLogin({
+      account: options.FETC_ACCOUNT,
+      password: options.FETC_PASSWORD,
+      profileDir: path.join(DATA_DIR, 'chrome-profile'),
+      vncUrl: buildVncUrl(),
+      manualTtlMs: (Number(options.MANUAL_LOGIN_TTL_MIN) || 8) * 60 * 1000,
+      onNotify: notifyVercel,
+    });
+  })()
     .then(({ cookies, via, loginId }) => {
       const asObj = Object.fromEntries((cookies || []).map((c) => [c.name, c.value]));
       jar = new CookieJar(asObj);
@@ -237,9 +270,12 @@ function triggerLogin(reason) {
       console.error('[etag-relay] 登入流程失敗:', e && e.message);
     })
     .finally(() => {
-      loginInFlight = null;
+      // 只有「自己還是當前流程」才清空——force 重啟時舊流程的 finally 會晚於新流程的指派,
+      // 無條件清空會把新流程的 in-flight 狀態抹掉(第二次 /trigger 就會再開一個瀏覽器)。
+      if (loginInFlight === mine) loginInFlight = null;
     });
-  return loginInFlight;
+  loginInFlight = mine;
+  return mine;
 }
 
 async function resolvePlateCin(plate) {
@@ -291,7 +327,7 @@ async function handleQuery(req, res) {
     return sendJson(res, 200, responseBody);
   } catch (e) {
     if (e && e.code === 'SESSION_EXPIRED') {
-      triggerLogin('query-session-expired'); // fire-and-forget:本次查詢仍回失效,下次 cron 補(冪等)
+      noteSessionDead('query-session-expired'); // 0.4.0:只推每日一則通知,不開瀏覽器(本次查詢仍回失效,下次 cron 補;冪等)
       return sendJson(res, 200, { ok: false, reason: 'session-expired' });
     }
     console.error('[etag-relay] /query error:', e && e.message); // 訊息本身不含帳密/cookie
@@ -368,7 +404,7 @@ async function handlePrint(req, res) {
     });
   } catch (e) {
     if (e && e.code === 'SESSION_EXPIRED') {
-      triggerLogin('print-session-expired'); // fire-and-forget,同 handleQuery 既有模式
+      noteSessionDead('print-session-expired'); // 0.4.0:同 handleQuery,只通知不開瀏覽器
       return sendJson(res, 200, { ok: false, reason: 'session-expired' });
     }
     // 契約沒有 internal-error 這個 reason,一律歸 pdf-failed(訊息本身不含帳密/cookie)。
@@ -477,7 +513,7 @@ function scheduleKeepAlive() {
     },
     onExpired: () => {
       console.warn('[etag-relay] keep-alive 偵測到 session 失效');
-      triggerLogin('keep-alive-expired');
+      noteSessionDead('keep-alive-expired');   // 0.4.0:不再自動開瀏覽器(見 noteSessionDead 註解)
     },
   });
   sessionMeta.lastKeepAlive = Date.now();
@@ -501,8 +537,10 @@ if (require.main === module) {
       // /collect 的重新登入按鈕(manual-request,不受通知冷卻限制)
       captcha: {
         shot: (opts) => require('./lib/login').captchaShot(opts),
+        meta: () => require('./lib/login').capMeta(),
+        state: () => require('./lib/login').flowState(),
         submit: (code) => require('./lib/login').submitCode(code),
-        trigger: () => triggerLogin('manual-request'),
+        trigger: (opts) => triggerLogin('manual-request', opts || {}),
       },
     });
   } catch (e) {
@@ -517,8 +555,8 @@ if (require.main === module) {
       // 0.3.12(使用者裁示):啟動即驗一次 session——keep-alive 是 setInterval,第一次檢查在
       // 啟動後 10 分鐘;重啟後的失效盲區(session 已死卻要空等 10 分鐘才收到登入連結)靠這裡補。
       // 與 keep-alive 同一把尺(getAntiForgeryToken);空 jar 天然驗不過,涵蓋舊
-      // 'startup-no-session'(僅驗 jar 空)情境。失效觸發登入(自動觸發受通知冷卻約束,
-      // 但 lastManualNotifyAt 重啟歸零,重啟後首次通知必發)。
+      // 'startup-no-session'(僅驗 jar 空)情境。0.4.0:失效只走 noteSessionDead(每日一則、
+      // 不開瀏覽器);通知日期已落檔 session.json,重啟不會重推同一天。
       (async () => {
         try {
           const { getAntiForgeryToken } = require('./lib/fetc-client');
@@ -533,7 +571,7 @@ if (require.main === module) {
         } catch (e) {
           console.warn('[etag-relay] 啟動 session 檢查異常(視為失效,觸發登入):', e && e.message);
         }
-        triggerLogin('startup-session-invalid');
+        noteSessionDead('startup-session-invalid');   // 0.4.0:啟動驗到失效也只通知,不開瀏覽器
       })();
     }
   });

@@ -27,7 +27,9 @@
 const crypto = require('crypto');
 
 const HOME_URL = 'https://www.fetc.net.tw/';
-const DEFAULT_MANUAL_TTL_MS = 15 * 60 * 1000;
+// 0.4.0:on-demand 之後,流程只在使用者真的在登入頁時才起——人就在畫面前,不需要留 15 分鐘
+// 空等(空等=瀏覽器常駐吃 CPU、驗證碼與 v3 情境過期)。8 分鐘足夠輸碼與換一張重試。
+const DEFAULT_MANUAL_TTL_MS = 8 * 60 * 1000;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 // 進行中登入流程的 page(同一時間最多一個,server.js loginInFlight 互斥保證)——
@@ -44,16 +46,34 @@ const WEB_ATTEMPT_MAX = 3;
 // 本輪流程最終結果('success'|'failed')——submitCode() 輪詢中若 activePage 被主流程
 // 收走(登入完成瀏覽器即關),靠這個判斷是成功收走還是失敗收走。
 let lastFlowResult = null;
+// 最近一次驗證碼取圖的來源診斷(0.4.0):{sel,w,h,fallback?}——抓錯圖時一看就知道命中哪個選擇器。
+let lastCapMeta = null;
+// 本輪流程開始時間(0.4.0 on-demand):登入頁用 /state 的 ageSec 判斷「這張驗證碼是不是放太久了」,
+// 過期就自動重啟流程,不讓使用者對著幾小時前的頁面輸碼。
+let flowStartedAt = 0;
 
 // 確保 4 碼驗證碼圖已載入(src 由頁面 JS 帶入,實測**有時要點刷新才會出現**)。
 // 0.3.4 拆軌道 A 時把 captureCaptchaImage 連同這段等待+刷新邏輯一起拆掉=拆過頭,
 // 真人進 noVNC 看到的是空白圖、根本沒辦法輸碼(2026-07-27 使用者實測回報)——補回,
 // 只確保載入、不再截圖。
+// 驗證碼 img 候選選擇器(0.4.0):原本只認 `#section-2 .vcodeImage` 一個 class——遠通改版
+// 或版面位移就抓錯東西。依序試,第一個「已載入且有像素」的就是它。
+const CAP_IMG_SELECTORS = [
+  '#section-2 .vcodeImage',
+  '#section-2 img[src*="ValidateCode" i]',
+  '#section-2 img[src*="vcode" i]',
+  '#_login img[src*="ValidateCode" i]',
+  '#section-2 form img',
+];
+
 async function ensureCaptchaLoaded(page) {
-  const imgSel = '#section-2 .vcodeImage';
-  const imgLoaded = (sel) => {
-    const img = document.querySelector(sel);
-    return !!(img && img.complete && img.naturalWidth > 0);
+  const imgSel = CAP_IMG_SELECTORS;
+  const imgLoaded = (sels) => {
+    for (const sel of sels) {
+      const img = document.querySelector(sel);
+      if (img && img.complete && img.naturalWidth > 0) return true;
+    }
+    return false;
   };
   try {
     await page.waitForFunction(imgLoaded, imgSel, { timeout: 8000 });
@@ -78,17 +98,68 @@ async function refreshCaptcha() {
 
 // 截目前的 4 碼驗證碼圖(給登入頁 <img> 顯示;refresh=true 先換一張再截)。
 // 沒有進行中的登入流程回 null(頁面據此顯示「開始登入」而不是壞圖)。
+// 0.4.0 重寫(使用者 07-30 回報「驗證碼圖的位子跑掉,看不到真的驗證碼」=登不進去的真凶:
+// 顯示的不是真的那張圖,輸什麼都必被拒)。原本用元素區域截圖(page.$(sel).screenshot()),
+// 只要遠通改 DOM/CSS、元素被遮住或版面位移,截到的就是旁邊空白。
+// 改法:把瀏覽器**已經載入的那張 img** 畫進 canvas 取 dataURL——拿到的是實際像素,與螢幕
+// 座標無關。⚠刻意不去重抓 img 的 src URL:重抓通常讓遠通伺服器端換一組新碼,與使用者要
+// 對應的那組脫鉤。截圖 fallback 保留(canvas 被 CORS/tainted 擋時)。
 async function captchaShot({ refresh } = {}) {
   const page = activePage;
   if (!page) return null;
   try {
     if (refresh) await page.click('#section-2 a.refresh').catch(() => {});
     await ensureCaptchaLoaded(page);
-    const el = await page.$('#section-2 .vcodeImage');
-    return el ? await el.screenshot() : null;
+
+    const shot = await page.evaluate((sels) => {
+      for (const sel of sels) {
+        const img = document.querySelector(sel);
+        if (!img || !img.complete || !img.naturalWidth) continue;
+        try {
+          const c = document.createElement('canvas');
+          c.width = img.naturalWidth;
+          c.height = img.naturalHeight;
+          c.getContext('2d').drawImage(img, 0, 0);
+          const src = String(img.getAttribute('src') || '');
+          return {
+            dataUrl: c.toDataURL('image/png'),
+            sel, w: img.naturalWidth, h: img.naturalHeight,
+            srcPath: src.split('?')[0].slice(-60),   // 只留路徑尾段供診斷,不帶 query
+          };
+        } catch (e) {
+          return { error: String((e && e.message) || e), sel };
+        }
+      }
+      return null;
+    }, CAP_IMG_SELECTORS);
+
+    if (shot && shot.dataUrl) {
+      lastCapMeta = { sel: shot.sel, w: shot.w, h: shot.h };
+      console.log(`[login] 驗證碼圖取得(canvas):sel=${shot.sel} ${shot.w}x${shot.h} src=…${shot.srcPath}`);
+      return Buffer.from(shot.dataUrl.split(',')[1], 'base64');
+    }
+    console.warn('[login] canvas 取圖失敗' + (shot && shot.error ? `(${shot.error})` : '(找不到已載入的驗證碼 img)') + ',退回元素截圖');
+
+    for (const sel of CAP_IMG_SELECTORS) {
+      const el = await page.$(sel);
+      if (!el) continue;
+      await el.scrollIntoViewIfNeeded().catch(() => {});
+      const buf = await el.screenshot().catch(() => null);
+      if (buf) {
+        lastCapMeta = { sel, fallback: true };
+        console.warn(`[login] 驗證碼圖取得(元素截圖 fallback):sel=${sel}`);
+        return buf;
+      }
+    }
+    return null;
   } catch (e) {
     return null; // 頁面導航中/已關閉,當作沒有圖
   }
+}
+
+// 最近一次取圖的診斷(server.js 掛進 /captcha.png 的回應 header,頁面 console 可見)
+function capMeta() {
+  return lastCapMeta;
 }
 
 // 網頁輸碼送出(0.3.5 使用者裁示:驗證碼顯示在登入頁、頁面直接輸碼=主要路徑)。
@@ -112,10 +183,19 @@ async function submitCode(code) {
   webAttempts += 1;
 
   try {
-    // 清掉舊碼再逐字輸入(帶延遲——v3 看互動行為,瞬間灌值是機器人特徵)
+    // 清掉舊碼再逐字輸入(帶延遲——v3 看互動行為,瞬間灌值是機器人特徵)。
+    // 0.4.0:補滑鼠軌跡+抖動延遲,讓行為訊號更像真人(純加分,不改判定邏輯)。
+    const box = await page.locator('#smartIDLogin_validateCode').boundingBox().catch(() => null);
+    if (box) {
+      await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.5, { steps: 8 }).catch(() => {});
+      await page.waitForTimeout(120 + Math.floor(Math.random() * 180));
+    }
     await page.fill('#smartIDLogin_validateCode', '');
     await page.click('#smartIDLogin_validateCode');
-    await page.type('#smartIDLogin_validateCode', String(code), { delay: 120 });
+    for (const ch of String(code)) {
+      await page.keyboard.type(ch, { delay: 100 + Math.floor(Math.random() * 80) });
+    }
+    await page.waitForTimeout(250 + Math.floor(Math.random() * 350));
     // 頁面原生送出(grecaptcha v3 + AJAX);點含 sForm2 的送出連結
     await page.click("a[onclick*=\"'sForm2'\"]");
   } catch (e) {
@@ -201,9 +281,10 @@ async function startLogin({ account, password, profileDir, vncUrl, manualTtlMs, 
       '--no-sandbox',
       '--disable-dev-shm-usage',
       '--disable-blink-features=AutomationControlled',
-      // Xvfb 螢幕是 1440x900(run.sh),視窗高度留給瀏覽器 UI(網址列/分頁列 ~44px)——
-      // 否則視窗比螢幕高,真人在 noVNC 裡看不到頁面底部(含登入送出鈕)。
-      '--window-size=1440,856',
+      // Xvfb 螢幕 0.4.0 起是 1280x720x16(run.sh,為 noVNC 流暢度降解析度/色深),視窗高度
+      // 留給瀏覽器 UI(網址列/分頁列 ~44px)——否則視窗比螢幕高,真人在 noVNC 裡看不到
+      // 頁面底部(含登入送出鈕)。改螢幕尺寸一定要同步改這裡。
+      '--window-size=1280,676',
       '--window-position=0,0',
     ],
     locale: 'zh-TW',
@@ -244,6 +325,8 @@ async function startLogin({ account, password, profileDir, vncUrl, manualTtlMs, 
     // (只留內容片段,不含帳密)。
     webAttempts = 0;
     lastFlowResult = null;
+    lastCapMeta = null;
+    flowStartedAt = Date.now();
     activeCtx = { loginResponse: null };
     const ctx = activeCtx;
     page.on('response', async (resp) => {
@@ -362,10 +445,40 @@ function startKeepAlive({ getJar, intervalMs = 10 * 60 * 1000, onExpired, onAliv
   return timer;
 }
 
+// 進行中流程的狀態(0.4.0):登入頁 /state 用——ageSec 太大代表這張驗證碼與 v3 情境都放太久,
+// 頁面會自動重啟流程而不是讓使用者對著舊頁面輸碼。
+function flowState() {
+  return {
+    inFlight: !!activePage,
+    ageSec: activePage && flowStartedAt ? Math.round((Date.now() - flowStartedAt) / 1000) : null,
+    attempts: webAttempts,
+    cap: lastCapMeta,
+  };
+}
+
+// 中止進行中的流程(0.4.0):供「過期自動重啟」與「被遠通拒絕後換全新流程」用——
+// 關掉頁面即可,startLogin 的主流程輪詢會看到 activePage 被收走而以 flow-ended 結束。
+async function abortLogin() {
+  const page = activePage;
+  if (!page) return false;
+  activePage = null;
+  lastFlowResult = 'aborted';
+  try {
+    const ctx = page.context();
+    await page.close().catch(() => {});
+    await ctx.close().catch(() => {});
+  } catch (e) { /* 已關閉 */ }
+  console.log('[login] 中止進行中的登入流程(過期或要求換新流程)');
+  return true;
+}
+
 module.exports = {
   startLogin,
   startKeepAlive,
   refreshCaptcha,
   captchaShot,
+  capMeta,
   submitCode,
+  flowState,
+  abortLogin,
 };

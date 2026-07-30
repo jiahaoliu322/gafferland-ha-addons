@@ -102,6 +102,8 @@ html,body{margin:0;height:100%;background:#0a0a0a;color:#f5f0e8;
   font-size:13px;padding:8px 16px}
 .msg{font-size:13px;color:#c9a96e;min-height:18px;max-width:320px;line-height:1.6}
 #capImg{width:min(280px,80vw);min-height:64px;border-radius:8px;background:#fff}
+#code{font-size:20px;letter-spacing:6px;text-align:center}
+.hint{font-size:12px;line-height:1.5;color:#9a9a9a;max-width:320px;text-align:center}
 details{max-width:min(320px,84vw)}
 details summary{font-size:13px;color:rgba(245,240,232,.45);cursor:pointer;padding:6px 0}
 details > div{display:flex;flex-direction:column;gap:12px;align-items:center;padding-top:10px}
@@ -133,9 +135,10 @@ details > div{display:flex;flex-direction:column;gap:12px;align-items:center;pad
     <h1>遠通電收登入</h1>
     <p>帳號密碼已填好,輸入下圖 4 碼驗證碼即可完成登入。</p>
     <img id="capImg" alt="驗證碼">
-    <input id="code" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="4 碼驗證碼" autocomplete="one-time-code">
+    <input id="code" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="4 碼驗證碼" autocomplete="one-time-code" autofocus>
     <button id="btnSend">送出登入</button>
     <button id="btnNewCap" class="sub">換一張</button>
+    <div class="hint">驗證碼有效時間很短,請在 1 分鐘內送出;圖看起來不像驗證碼就按「換一張」。</div>
     <div class="msg" id="cmsg"></div>
     <details id="advBox">
       <summary>進階:遠端畫面登入(上面送出被擋時用)</summary>
@@ -143,6 +146,8 @@ details > div{display:flex;flex-direction:column;gap:12px;align-items:center;pad
         <p>連上中繼主機的瀏覽器畫面,親手輸碼、按登入——真人操作不會被 Google 驗證擋。</p>
         <input type="password" id="pw" placeholder="VNC 密碼" autocomplete="current-password">
         <button id="go">連線</button>
+        <button id="btnSendKeys" class="sub">把上面的 4 碼打進遠端瀏覽器</button>
+        <div class="hint">手機鍵盤在遠端畫面常打不出數字:先在遠端畫面點一下遠通的驗證碼欄位,再按這個鈕把上面輸入框的 4 碼送進去,然後親手按遠端的「登入」。</div>
         <div class="msg" id="msg"></div>
       </div>
     </details>
@@ -176,28 +181,40 @@ async function loadCaptcha(refresh) {
   return true;
 }
 
+// 0.4.0:先問 /state。有流程但已放太久(>180 秒)= 驗證碼與 Google 驗證情境都過期,送出必被
+// 擋——直接自動重啟一個新流程,不讓使用者對著舊頁面白費工(2026-07-30 使用者實測的主症狀)。
+const STALE_SEC = 180;
+async function startFlow(force) {
+  showCard('cardStart');
+  $('smsg').textContent = force ? '重新啟動登入流程中…' : '啟動瀏覽器中…';
+  $('btnStart').disabled = true;
+  try { await fetch(withKey('/trigger' + (force ? '?force=1' : '')), { method: 'POST' }); } catch (e) {}
+  // 輪詢等瀏覽器開好、驗證碼圖就緒(冷啟 ~10 秒,最多等 2 分鐘)
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 3000));
+    try {
+      if (await loadCaptcha(false)) { showCard('cardCode'); $('code').focus(); $('btnStart').disabled = false; return true; }
+    } catch (e) { /* 續等 */ }
+  }
+  $('smsg').textContent = '啟動逾時,請重新整理頁面再試';
+  $('btnStart').disabled = false;
+  return false;
+}
+
 async function init() {
+  let st = null;
+  try { st = await (await fetch(withKey('/state'), { cache: 'no-store' })).json(); } catch (e) {}
+  if (st && st.inFlight && typeof st.ageSec === 'number' && st.ageSec > STALE_SEC) {
+    return void startFlow(true);   // 舊流程過期 → 換全新的
+  }
   try {
-    if (await loadCaptcha(false)) { showCard('cardCode'); return; }
+    if (await loadCaptcha(false)) { showCard('cardCode'); $('code').focus(); return; }
   } catch (e) { /* 網路失敗當作無流程 */ }
   showCard('cardStart');
 }
 init();
 
-$('btnStart').addEventListener('click', async () => {
-  $('smsg').textContent = '啟動瀏覽器中…';
-  $('btnStart').disabled = true;
-  try { await fetch(withKey('/trigger'), { method: 'POST' }); } catch (e) {}
-  // 輪詢等瀏覽器開好、驗證碼圖就緒(冷啟 ~10 秒,最多等 2 分鐘)
-  for (let i = 0; i < 40; i++) {
-    await new Promise((r) => setTimeout(r, 3000));
-    try {
-      if (await loadCaptcha(false)) { showCard('cardCode'); return; }
-    } catch (e) { /* 續等 */ }
-  }
-  $('smsg').textContent = '啟動逾時,請重新整理頁面再試';
-  $('btnStart').disabled = false;
-});
+$('btnStart').addEventListener('click', () => { startFlow(false); });
 
 $('btnNewCap').addEventListener('click', async () => {
   cmsg('更新驗證碼…');
@@ -232,13 +249,46 @@ $('btnSend').addEventListener('click', async () => {
     'network': '連線失敗,請再試一次',
   }[r.reason] || '登入失敗(' + (r.reason || '未知') + ')';
   cmsg(reasonText);
-  if (r.reason === 'fetc-rejected' || r.reason === 'too-many-attempts') $('advBox').open = true;
-  if (r.reason === 'fetc-rejected' || r.reason === 'timeout') { $('code').value = ''; loadCaptcha(false).catch(() => {}); }
+  if (r.reason === 'too-many-attempts') $('advBox').open = true;
+  $('code').value = '';
+  // 0.4.0:被遠通拒/逾時 → 不在同一個(可能已被 v3 記點、或驗證碼已過期的)頁面上重試,
+  // 直接換一個全新流程與全新驗證碼;達 3 次上限則不再自動重啟,引導走遠端畫面。
+  if (r.reason === 'fetc-rejected' || r.reason === 'timeout') {
+    cmsg(reasonText + ' 正在換一組全新驗證碼…');
+    startFlow(true);
+  }
 });
 $('code').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btnSend').click(); });
+// 輸滿 4 碼就把焦點移到送出鈕(手機收起鍵盤、一按即送)
+$('code').addEventListener('input', () => { if (/^\d{4}$/.test($('code').value.trim())) $('btnSend').focus(); });
 
 // ── 備援:noVNC 遠端畫面(真人親手操作)────────────────────────────────
 let rfb = null;
+
+// 0.4.0:把上面輸入框的 4 碼「打」進遠端瀏覽器——手機 IME 透過 VNC 常常送不出數字
+// (2026-07-30 使用者實測),改由 noVNC 直接合成按鍵事件(keysym 0x30+digit)。
+// 使用者先在遠端畫面點一下遠通的驗證碼欄位(讓遠端焦點在該欄),再按此鈕,最後**親手**
+// 按遠端的「登入」——真人點擊是這條備援路線的價值所在,不代按。
+function wireSendKeys() {
+  const btn = document.getElementById('btnSendKeys');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    const code = $('code').value.trim();
+    if (!/^\d{4}$/.test(code)) return msg('請先在上面的輸入框填 4 碼數字');
+    if (!rfb) return msg('請先按「連線」連上遠端畫面');
+    try {
+      for (const ch of code) {
+        const keysym = 0x30 + Number(ch);   // '0'..'9'
+        rfb.sendKey(keysym, 'Digit' + ch, true);
+        rfb.sendKey(keysym, 'Digit' + ch, false);
+      }
+      msg('已把 ' + code.length + ' 碼送進遠端畫面,請確認欄位內容後親手按遠端的「登入」');
+    } catch (e) {
+      msg('送鍵失敗:' + e.message);
+    }
+  });
+}
+wireSendKeys();
 // securityfailure 訊息(VNC 密碼錯誤/連線被拒)比緊接著觸發的 disconnect 更有診斷價值,
 // 不該被 disconnect 的通用訊息蓋掉——用這個旗標記「這輪已經顯示過原因了」,下次按連線
 // 重新嘗試時重置。
@@ -391,13 +441,26 @@ function startVncServer({ enabled, token, onClientConnect, captcha }) {
     // ── 頁面輸碼三端點(0.3.5 主路徑;全部驗 key)────────────────────────
     // 目前的 4 碼驗證碼圖(?refresh=1 先換一張再截)。404=沒有進行中的登入流程,
     // 頁面據此顯示「開始登入」。
+    // 進行中流程狀態(0.4.0):頁面用 ageSec 判斷該顯示現有驗證碼、還是自動重啟一個新流程。
+    if (req.method === 'GET' && url.pathname === '/state') {
+      if (!keyOk()) { res.writeHead(403); return res.end(); }
+      const st = (captcha && captcha.state && captcha.state()) || { inFlight: false, ageSec: null };
+      return sendJson(res, 200, st);
+    }
     if (req.method === 'GET' && url.pathname === '/captcha.png') {
       if (!keyOk()) { res.writeHead(403); return res.end(); }
       if (!captcha || !captcha.shot) { res.writeHead(404); return res.end(); }
       Promise.resolve(captcha.shot({ refresh: url.searchParams.get('refresh') === '1' }))
         .then((buf) => {
           if (!buf) { res.writeHead(404); return res.end(); }
-          res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': buf.length, 'Cache-Control': 'no-store' });
+          // 0.4.0 診斷 header(無敏感資訊):抓圖命中哪個選擇器、實際尺寸、是否走截圖 fallback
+          // ——使用者若再回報「圖不對」,開瀏覽器 devtools 看 response header 即可定位。
+          const m = (captcha.meta && captcha.meta()) || null;
+          res.writeHead(200, {
+            'Content-Type': 'image/png', 'Content-Length': buf.length, 'Cache-Control': 'no-store',
+            'X-Cap-Src': m ? String(m.sel || '') : '', 'X-Cap-Size': m && m.w ? `${m.w}x${m.h}` : '',
+            'X-Cap-Fallback': m && m.fallback ? '1' : '0',
+          });
           res.end(buf);
         })
         .catch(() => { res.writeHead(500); res.end(); });
@@ -418,7 +481,10 @@ function startVncServer({ enabled, token, onClientConnect, captcha }) {
     if (req.method === 'POST' && url.pathname === '/trigger') {
       if (!keyOk()) { res.writeHead(403); return res.end(); }
       if (captcha && captcha.trigger) {
-        try { captcha.trigger(); } catch (e) { /* 觸發失敗頁面輪詢自然逾時,不需回錯 */ }
+        // force=1(0.4.0):頁面偵測到現有流程已放太久(ageSec 過大)或上一次送出被遠通拒——
+        // 中止舊流程、開一個全新頁面與全新 v3 情境重來,不讓使用者對著過期的驗證碼輸碼。
+        const force = url.searchParams.get('force') === '1';
+        try { captcha.trigger({ force }); } catch (e) { /* 觸發失敗頁面輪詢自然逾時,不需回錯 */ }
       }
       return sendJson(res, 200, { ok: true });
     }
