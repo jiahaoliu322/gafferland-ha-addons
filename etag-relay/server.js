@@ -268,6 +268,9 @@ function triggerLogin(reason, opts = {}) {
       // e.message 只可能含 URL/HTTP status/逾時等網路層資訊(lib/login.js 沿用 sanitize 鐵則),
       // 不含帳密/cookie。
       console.error('[etag-relay] 登入流程失敗:', e && e.message);
+      // 0.4.1:把原因交給 /state,讓登入頁直接顯示「為什麼開不起來」——0.4.0 時使用者只看到
+      // 永遠轉圈的「啟動瀏覽器中…」,原因只存在 add-on 日誌裡。
+      try { require('./lib/login').noteLoginError(e); } catch (e2) { /* 診斷用途,失敗不影響 */ }
     })
     .finally(() => {
       // 只有「自己還是當前流程」才清空——force 重啟時舊流程的 finally 會晚於新流程的指派,

@@ -7,9 +7,11 @@
 set -u
 export DISPLAY=:99
 echo "[etag-relay] 啟動 Xvfb on ${DISPLAY}"
-# 0.4.0:1440x900x24 → 1280x720x16(降解析度/色深換 noVNC 手機流暢度;使用者實測原設定極卡)
+# 0.4.0→0.4.1:解析度降到 720p 換 noVNC 流暢度(有效),但**色深必須維持 24**——0.4.0 一度改
+# 成 x16,Chrome 在 16bpp X server 上起不來/渲染異常,結果登入頁永遠開不出來(使用者實測
+# 「一直卡在啟動瀏覽器中」)。流暢度的收益主要來自解析度與 x11vnc 的 -defer/-wait,色深不值得冒險。
 # ⚠ 改這裡一定要同步改 lib/login.js 的 --window-size(否則視窗超出螢幕,遠端看不到登入鈕)
-Xvfb "${DISPLAY}" -screen 0 1280x720x16 -nolisten tcp &
+Xvfb "${DISPLAY}" -screen 0 1280x720x24 -nolisten tcp &
 XVFB_PID=$!
 # 等 Xvfb 就緒(最多 10 秒);沒起來也繼續跑(server 會以 headless 失敗回報,不致無聲卡死)
 for i in $(seq 1 20); do

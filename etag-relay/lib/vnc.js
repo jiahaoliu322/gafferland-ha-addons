@@ -184,19 +184,48 @@ async function loadCaptcha(refresh) {
 // 0.4.0:先問 /state。有流程但已放太久(>180 秒)= 驗證碼與 Google 驗證情境都過期,送出必被
 // 擋——直接自動重啟一個新流程,不讓使用者對著舊頁面白費工(2026-07-30 使用者實測的主症狀)。
 const STALE_SEC = 180;
+// 0.4.1:輪詢 /state 顯示**真實階段**,不再盲等驗證碼圖。0.4.0 只要開表單失敗就永遠停在
+// 「啟動瀏覽器中…」,使用者完全看不到原因(2026-07-31 實測)。
+const STAGE_TEXT = {
+  launching: '啟動瀏覽器中…(約 10 秒)',
+  'opening-form': '開啟遠通登入表單中…',
+  ready: '載入驗證碼…',
+  'manual-only': '自動開啟登入表單失敗,請改用下方「遠端畫面登入」親手操作(瀏覽器已保留)',
+  failed: '登入流程啟動失敗',
+};
+async function readState() {
+  try { return await (await fetch(withKey('/state'), { cache: 'no-store' })).json(); } catch (e) { return null; }
+}
 async function startFlow(force) {
   showCard('cardStart');
   $('smsg').textContent = force ? '重新啟動登入流程中…' : '啟動瀏覽器中…';
   $('btnStart').disabled = true;
   try { await fetch(withKey('/trigger' + (force ? '?force=1' : '')), { method: 'POST' }); } catch (e) {}
-  // 輪詢等瀏覽器開好、驗證碼圖就緒(冷啟 ~10 秒,最多等 2 分鐘)
+  // 最多等 2 分鐘;每 3 秒問一次 /state,同時試著取驗證碼圖
   for (let i = 0; i < 40; i++) {
     await new Promise((r) => setTimeout(r, 3000));
     try {
       if (await loadCaptcha(false)) { showCard('cardCode'); $('code').focus(); $('btnStart').disabled = false; return true; }
     } catch (e) { /* 續等 */ }
+    const st = await readState();
+    if (!st) continue;
+    if (st.stage === 'failed') {
+      $('smsg').textContent = (STAGE_TEXT.failed + ':' + ((st.error && st.error.message) || '未知原因')) + '——請按「開始登入」重試,或查看 add-on 日誌';
+      $('btnStart').disabled = false;
+      return false;
+    }
+    if (st.stage === 'manual-only') {
+      $('smsg').textContent = STAGE_TEXT['manual-only'];
+      $('btnStart').disabled = false;
+      showCard('cardCode');          // 進階區在這張卡裡
+      $('advBox').open = true;
+      $('capImg').removeAttribute('src');
+      cmsg(STAGE_TEXT['manual-only']);
+      return false;
+    }
+    $('smsg').textContent = STAGE_TEXT[st.stage] || '啟動中…';
   }
-  $('smsg').textContent = '啟動逾時,請重新整理頁面再試';
+  $('smsg').textContent = '啟動逾時,請重新整理頁面再試(仍失敗請看 add-on 日誌)';
   $('btnStart').disabled = false;
   return false;
 }

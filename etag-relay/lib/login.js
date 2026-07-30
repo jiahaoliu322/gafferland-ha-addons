@@ -51,6 +51,17 @@ let lastCapMeta = null;
 // 本輪流程開始時間(0.4.0 on-demand):登入頁用 /state 的 ageSec 判斷「這張驗證碼是不是放太久了」,
 // 過期就自動重啟流程,不讓使用者對著幾小時前的頁面輸碼。
 let flowStartedAt = 0;
+// 0.4.1:流程走到哪一步 + 失敗原因——0.4.0 只要開表單失敗,頁面就永遠 404 盲輪詢、
+// 使用者看不到任何原因(2026-07-31 實測「一直卡在啟動瀏覽器中」)。
+// 'idle'|'launching'(開瀏覽器)|'opening-form'(開登入表單)|'ready'(驗證碼可輸)
+// |'manual-only'(自動開表單失敗,瀏覽器留著給真人用 VNC 手動登入)|'failed'
+let flowStage = 'idle';
+let lastLoginError = null;   // { message, at }
+
+function setStage(stage, err) {
+  flowStage = stage;
+  if (err) lastLoginError = { message: String(err && err.message ? err.message : err).slice(0, 200), at: Date.now() };
+}
 
 // 確保 4 碼驗證碼圖已載入(src 由頁面 JS 帶入,實測**有時要點刷新才會出現**)。
 // 0.3.4 拆軌道 A 時把 captureCaptchaImage 連同這段等待+刷新邏輯一起拆掉=拆過頭,
@@ -274,6 +285,8 @@ async function startLogin({ account, password, profileDir, vncUrl, manualTtlMs, 
 
   const loginId = crypto.randomUUID();
   const ttlMs = manualTtlMs || DEFAULT_MANUAL_TTL_MS;
+  setStage('launching');
+  lastLoginError = null;
 
   const launchOpts = {
     headless: false,
@@ -281,7 +294,8 @@ async function startLogin({ account, password, profileDir, vncUrl, manualTtlMs, 
       '--no-sandbox',
       '--disable-dev-shm-usage',
       '--disable-blink-features=AutomationControlled',
-      // Xvfb 螢幕 0.4.0 起是 1280x720x16(run.sh,為 noVNC 流暢度降解析度/色深),視窗高度
+      // Xvfb 螢幕 0.4.1 起是 1280x720x24(run.sh,720p 換 noVNC 流暢度;⚠色深必須 24,
+      // 0.4.0 曾改 16 導致 Chrome 起不來、登入頁永遠開不出來),視窗高度
       // 留給瀏覽器 UI(網址列/分頁列 ~44px)——否則視窗比螢幕高,真人在 noVNC 裡看不到
       // 頁面底部(含登入送出鈕)。改螢幕尺寸一定要同步改這裡。
       '--window-size=1280,676',
@@ -326,7 +340,10 @@ async function startLogin({ account, password, profileDir, vncUrl, manualTtlMs, 
     webAttempts = 0;
     lastFlowResult = null;
     lastCapMeta = null;
+    lastLoginError = null;
     flowStartedAt = Date.now();
+    setStage('opening-form');
+    console.log(`[login] 瀏覽器已啟動(loginId=${loginId})`);
     activeCtx = { loginResponse: null };
     const ctx = activeCtx;
     page.on('response', async (resp) => {
@@ -371,9 +388,21 @@ async function startLogin({ account, password, profileDir, vncUrl, manualTtlMs, 
       await page.goto(HOME_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
     }
 
-    await openLoginForm(page, account, password);
-    await ensureCaptchaLoaded(page);
+    // 0.4.1:先認領 activePage 再開表單——開表單失敗時 /state、VNC 備援與診斷仍可用
+    // (0.4.0 是全部成功才認領,任何一步失敗都變成「頁面永遠 404、使用者看不到原因」)。
     activePage = page; // 此後 noVNC 用戶端接上會觸發 refreshCaptcha()
+    try {
+      await openLoginForm(page, account, password);
+      console.log(`[login] 登入表單已開啟(loginId=${loginId})`);
+      await ensureCaptchaLoaded(page);
+      console.log(`[login] 驗證碼就緒(loginId=${loginId})`);
+      setStage('ready');
+    } catch (e) {
+      // **不關瀏覽器**:自動開表單失敗不該連「真人用 VNC 自己登入」這條備援也一起斷
+      // (0.4.0 的 catch 會收掉 context,人工路同時死)。留著頁面,續走下方輪詢等真人完成。
+      console.warn(`[login] 自動開啟登入表單失敗,保留瀏覽器供真人以 noVNC 手動登入:`, e && e.message);
+      setStage('manual-only', e);
+    }
 
     // 通知 Vercel:老闆要點連結進 noVNC 才能完成登入。
     if (onNotify) {
@@ -390,6 +419,7 @@ async function startLogin({ account, password, profileDir, vncUrl, manualTtlMs, 
         if (cookies.some((c) => c.name === 'FETC_P' && c.value)) {
           console.log(`[login] 真人登入成功(loginId=${loginId})`);
           lastFlowResult = 'success'; // 先標結果再收 activePage——submitCode() 輪詢靠這個順序判斷
+          setStage('idle');
           activePage = null;
           await context.close().catch(() => {});
           return { cookies, via: 'manual', loginId };
@@ -408,7 +438,10 @@ async function startLogin({ account, password, profileDir, vncUrl, manualTtlMs, 
     // rethrow,讓「所有路徑都會 context.close()」只有一個出口,不必在每個失敗分支各自重複。
     throw new Error('manual-login-timeout');
   } catch (e) {
-    if (lastFlowResult !== 'success') lastFlowResult = 'failed';
+    if (lastFlowResult !== 'success') {
+      lastFlowResult = 'failed';
+      setStage(lastFlowResult === 'aborted' ? 'idle' : 'failed', e);
+    }
     activePage = null;
     await context.close().catch(() => {});
     throw e;
@@ -450,10 +483,18 @@ function startKeepAlive({ getJar, intervalMs = 10 * 60 * 1000, onExpired, onAliv
 function flowState() {
   return {
     inFlight: !!activePage,
+    stage: flowStage,
+    error: lastLoginError,
     ageSec: activePage && flowStartedAt ? Math.round((Date.now() - flowStartedAt) / 1000) : null,
     attempts: webAttempts,
     cap: lastCapMeta,
   };
+}
+
+// server.js 在 startLogin 整條 reject 時呼叫(例如瀏覽器根本啟動不了)——讓失敗原因能上頁面,
+// 不必翻 add-on 日誌。
+function noteLoginError(err) {
+  setStage('failed', err);
 }
 
 // 中止進行中的流程(0.4.0):供「過期自動重啟」與「被遠通拒絕後換全新流程」用——
@@ -480,5 +521,6 @@ module.exports = {
   capMeta,
   submitCode,
   flowState,
+  noteLoginError,
   abortLogin,
 };
