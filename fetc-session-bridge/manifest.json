@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Gafferland eTag Session",
+  "version": "1.0.0",
+  "description": "一鍵把遠通電收會員區的 cookies 送到 Gafferland 站台,更新 eTag session 並觸發補跑結算。",
+  "permissions": ["cookies", "storage", "clipboardWrite"],
+  "host_permissions": [
+    "https://*.fetc.net.tw/*",
+    "https://gafferland.vercel.app/*",
+    "https://www.gafferland.net/*",
+    "https://gafferland.net/*"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
+  }
+}
