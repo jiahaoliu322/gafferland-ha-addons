@@ -488,6 +488,31 @@ async function generateNativePdf(jar, fieldToken, printHtml) {
   return buf;
 }
 
+// ── keep-alive(0.5.0:自 lib/login.js 搬入;純 HTTP,不再依賴登入模組)──────
+// 定期 ping 會員頁偵測 session 是否仍有效(借用 getAntiForgeryToken 的登入頁重導向偵測)。
+// getJar: () => jar(而非直接傳 jar 物件)確保每次 tick 都讀「現在」的 jar——呼叫端若整個
+// 重新指派 jar 變數(如 /session 換上新 cookies),計時器才吃得到換上的新 session,不會
+// 永遠 ping 著啟動時捕進 closure 的舊 jar。
+// intervalMs 預設 10 分:遠通閒置逾時約 20 分,10 分留單次失敗的餘裕,成本只是一個便宜的 GET。
+// onAlive():ping 成功(拿到 token)時呼叫,讓呼叫端把 lastKeepAlive/續期 cookie 存檔
+// (遠通 ping 可能帶 Set-Cookie 續期,不存回等於白 ping)。
+function startKeepAlive({ getJar, intervalMs = 10 * 60 * 1000, onExpired, onAlive }) {
+  const timer = setInterval(async () => {
+    try {
+      const token = await getAntiForgeryToken(getJar());
+      if (token) {
+        if (onAlive) onAlive();
+      } else if (onExpired) {
+        onExpired();
+      }
+    } catch (e) {
+      if (onExpired) onExpired(e);
+    }
+  }, intervalMs);
+  timer.unref();
+  return timer;
+}
+
 module.exports = {
   CookieJar,
   getAntiForgeryToken,
@@ -502,5 +527,6 @@ module.exports = {
   looksLikeLoginRedirect,
   extractFieldToken,
   fmtDate,
+  startKeepAlive,
   PRINT_PATH,
 };

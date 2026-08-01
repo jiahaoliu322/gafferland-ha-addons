@@ -1,5 +1,18 @@
 name: "eTag Relay v3"
-version: "0.4.1"
+version: "0.5.0"
+# 0.5.0(使用者裁示,整套拆除登入/VNC/瀏覽器):
+# session 更新改由使用者電腦的 Chrome 擴充功能把 cookies POST 進既有的 POST /session
+# 端點——handleSession 補真驗證(與 keep-alive 同一把尺 getAntiForgeryToken,驗不過回
+# 400 session-invalid、不蓋 jar/不存檔),驗證通過才換 jar/存檔,回應送出後 fire-and-forget
+# 回呼 Vercel(mode:'success',接上既有「有單即自動補跑結算」)。session 失效不再推 LINE
+# 通知(noteSessionDead 改純 log),提醒改由 Vercel 端「有單才提醒」的邏輯負責。拆除登入/
+# VNC/Chrome 全套:刪 lib/vnc.js、lib/login.js(唯一還有用的 startKeepAlive 搬進
+# lib/fetc-client.js),server.js 移除 triggerLogin/POST /login/vncToken/captcha 接線,
+# run.sh 移除 Xvfb/x11vnc,Dockerfile 移除 playwright/xvfb/x11vnc 安裝層與 8098
+# EXPOSE,package.json 移除 playwright/@novnc/novnc/ws——映像大瘦身。
+# 追加兩處:①keep-alive 改無條件跑(保溫只依賴 jar,不再拿已無功能用途的 FETC_ACCOUNT
+# 當閘門);②VNC_* 等四個停用 options 在 schema 保留為選填(使用者既有設定還存著這些
+# key,直接刪 schema 可能讓 Supervisor 驗證不過、更新後起不來),下版再清。
 # 0.4.1(Round M5 追修,使用者實測「一直卡在啟動瀏覽器中、看不到登入頁」):
 # ①**回退色深** Xvfb 1280x720x16 → x24——0.4.0 為了 VNC 流暢度改 16bpp,Chrome 在低色深
 #   X server 上起不來/渲染異常,登入頁根本開不出來(解析度 720p 與 x11vnc -defer/-wait 保留,
@@ -84,10 +97,8 @@ arch:
 init: false
 ports:
   8099/tcp: 8099
-  8098/tcp: 8098
 ports_description:
   8099/tcp: "etag-relay HTTP API(建議只透過 Cloudflare Tunnel 對外,不直接開防火牆)"
-  8098/tcp: "noVNC 遠端登入畫面(Round F;僅設 VNC_PASSWORD 才啟動,務必只透過 Cloudflare Tunnel 對外)"
 map:
   - data:rw
 options:
@@ -96,17 +107,16 @@ options:
   RELAY_SECRET: ""
   VERCEL_CAPTCHA_URL: ""
   VERCEL_CALLBACK_SECRET: ""
-  PUBLIC_BASE_URL: ""
-  VNC_PASSWORD: ""
-  VNC_PUBLIC_URL: ""
-  MANUAL_LOGIN_TTL_MIN: 15
 schema:
   FETC_ACCOUNT: str
   FETC_PASSWORD: password
   RELAY_SECRET: password
   VERCEL_CAPTCHA_URL: str
   VERCEL_CALLBACK_SECRET: password
-  PUBLIC_BASE_URL: str
+  # ↓ 0.5.0 已停用(登入/VNC 拆除,程式不再讀取),但使用者既有設定裡還存著這些 key——
+  # Supervisor 會拿 schema 驗證使用者設定,直接從 schema 刪除可能讓更新後 add-on 起不來。
+  # 保留為選填讓舊設定通過驗證,等使用者從 UI 清掉欄位後的下個版本再移除。
   VNC_PASSWORD: password?
   VNC_PUBLIC_URL: str?
+  PUBLIC_BASE_URL: str?
   MANUAL_LOGIN_TTL_MIN: int?
