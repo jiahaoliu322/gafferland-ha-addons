@@ -1,0 +1,43 @@
+<!--
+  合成測試 fixture(0.5.1)——print 回應。零真實資料:時間/路線/里程/金額皆手造
+  假值,非任何實際遠通帳戶/車輛/交易。對齊 lib/parse.js parsePrintRows 讀取的結構:
+  #tblFeeList 內 tr.detail-row(逐列,td 順序 0=時間/1=路線/2=里程/3=通行費)、
+  總計列(tr 內含 td.date.total,同樣 4 個 td,取 eq(2)/eq(3))——刻意**不用 colspan**,
+  因為 parsePrintRows 是照欄位索引取值,colspan 會讓索引位移。
+-->
+<!doctype html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<title>合成測試 fixture — print</title>
+</head>
+<body>
+<div id="printDetail">
+  <table id="tblFeeList" class="table">
+    <thead>
+      <tr><th>時間</th><th>行車路線</th><th>里程</th><th>通行費</th></tr>
+    </thead>
+    <tbody>
+      <tr class="detail-row">
+        <td>04:01:47</td>
+        <td>五股-高公局</td>
+        <td>1.4</td>
+        <td>1.6元</td>
+      </tr>
+      <tr class="detail-row">
+        <td>05:30:12</td>
+        <td>高公局-中和</td>
+        <td>5.6</td>
+        <td>7.8元</td>
+      </tr>
+      <tr>
+        <td class="date total">總計</td>
+        <td></td>
+        <td>7.0</td>
+        <td>9.4元</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>

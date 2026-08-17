@@ -1,0 +1,39 @@
+<!--
+  合成測試 fixture(0.5.1)——search 回應。零真實資料:batchId 為手造的規律假序號,
+  非任何實際遠通帳戶/車輛/交易。對齊 lib/parse.js parseSearchBatches 讀取的結構:
+  #tblFeeList 內 tr[data-level="1"][data-batchid][data-date]。
+  第三列刻意缺 data-batchid,驗證「無 batchId/date 視為無效列,跳過」分支。
+-->
+<!doctype html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<title>合成測試 fixture — search</title>
+</head>
+<body>
+<div id="mainContent">
+  <table id="tblFeeList" class="table">
+    <thead>
+      <tr><th>日期</th><th>應繳金額</th><th>狀態</th></tr>
+    </thead>
+    <tbody>
+      <tr class="expander-cus" data-level="1" data-batchid="2607200000000000001" data-date="2026/07/20">
+        <td class="date">2026/07/20</td>
+        <td class="amount">100元</td>
+        <td class="status">未繳費</td>
+      </tr>
+      <tr class="expander-cus" data-level="1" data-batchid="2607200000000000002" data-date="2026/07/21">
+        <td class="date">2026/07/21</td>
+        <td class="amount">50元</td>
+        <td class="status">未繳費</td>
+      </tr>
+      <tr class="expander-cus" data-level="1" data-date="2026/07/22">
+        <td class="date">2026/07/22</td>
+        <td class="amount">0元</td>
+        <td class="status">無資料(此列故意缺 data-batchid,驗跳過分支)</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>

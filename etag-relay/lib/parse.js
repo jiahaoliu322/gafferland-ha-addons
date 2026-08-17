@@ -11,6 +11,18 @@
 
 const cheerio = require('cheerio');
 
+// ── 列數上限(0.5.1)──────────────────────────────────────────────────────
+// 防禦性上限,非預期回應內容爆量時截斷而非放任記憶體/CPU 無限吃(截斷＋warn,
+// 不 throw——契約沒有 too-many-rows 這個 reason,throw 會讓 /query|/print 變 500
+// 斷結算,截斷仍回可用的部分結果對呼叫端更友善)。
+// 上限論證(基準=E0/E1 實測正常值,取數倍寬鬆空間):
+//   detail 單日單批(實測 93 列)→ 500 = 5 倍以上
+//   search 一次查詢窗涵蓋的天數(批次數)→ 100
+//   print 整段租期(93 × 30 天 ≈ 2790 列量級)→ 5000
+const MAX_SEARCH_BATCHES = 100;
+const MAX_DETAIL_ROWS = 500;
+const MAX_PRINT_ROWS = 5000;
+
 // "2026/07/20" + "23:28:23" → 牆鐘 ts(ms)。日期或時間格式不符回 NaN。
 function wallTsFromParts(dateStr, timeStr) {
   const dm = String(dateStr || '').trim().match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
@@ -37,6 +49,10 @@ function parseSearchBatches(html) {
   const $ = cheerio.load(html);
   const out = [];
   $('#tblFeeList tr[data-level="1"]').each((_, el) => {
+    if (out.length >= MAX_SEARCH_BATCHES) {
+      console.warn(`[parse] parseSearchBatches 已達上限 ${MAX_SEARCH_BATCHES} 批,其餘列略過`);
+      return false; // cheerio each() return false = 中斷迭代
+    }
     const $el = $(el);
     const batchId = $el.attr('data-batchid');
     const date = $el.attr('data-date');
@@ -59,6 +75,10 @@ function parseDetailGantries(html, batchDate) {
   const $ = cheerio.load(`<table><tbody>${html}</tbody></table>`);
   const out = [];
   $('tr[data-level="3"]').each((_, el) => {
+    if (out.length >= MAX_DETAIL_ROWS) {
+      console.warn(`[parse] parseDetailGantries 已達上限 ${MAX_DETAIL_ROWS} 列,其餘列略過`);
+      return false;
+    }
     const $tr = $(el);
     const timeStr = $tr.attr('data-date');
     if (!timeStr) return;
@@ -93,6 +113,10 @@ function parsePrintRows(html) {
   const $ = cheerio.load(html);
   const rows = [];
   $('#tblFeeList tr.detail-row').each((_, el) => {
+    if (rows.length >= MAX_PRINT_ROWS) {
+      console.warn(`[parse] parsePrintRows 已達上限 ${MAX_PRINT_ROWS} 列,其餘列略過`);
+      return false;
+    }
     const tds = $(el).find('> td');
     rows.push({
       time: tds.eq(0).text().trim(),

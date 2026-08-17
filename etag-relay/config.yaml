@@ -1,5 +1,14 @@
 name: "eTag Relay v3"
-version: "0.5.0"
+version: "0.5.1"
+# 0.5.1(批 G:CI／文件／限流收尾):engines 隨 cheerio 1.2.0 實際需求 >=18→>=20.18.1
+# (package.json/package-lock.json 同步手改);Dockerfile 改 npm ci(要求 lock 存在且與
+# package.json 完全同步,fail-fast)、FROM 加 node:20-bookworm-slim digest pin;
+# test-parse.js/test-inline.js 改用 fixtures/ 內三份合成 HTML(零真實資料)、全離線
+# stub fetch,不再依賴 scratchpad 真實回應檔——CI/斷網環境可跑;lib/fetc-client.js
+# 三個 fetch 加 AbortSignal.timeout + content-length/實讀大小上限,lib/parse.js 三個
+# .each() 加列數上限(截斷+warn,不 throw,契約不變);README/DEPLOY 依現況(server.js
+# 為權威)重寫,拆除已不存在的 playwright/noVNC/VNC/8098 敘述,補 Chrome 擴充
+# POST /session 模型與限流常數表。
 # 0.5.0(使用者裁示,整套拆除登入/VNC/瀏覽器):
 # session 更新改由使用者電腦的 Chrome 擴充功能把 cookies POST 進既有的 POST /session
 # 端點——handleSession 補真驗證(與 keep-alive 同一把尺 getAntiForgeryToken,驗不過回

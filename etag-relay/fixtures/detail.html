@@ -1,0 +1,33 @@
+<!--
+  合成測試 fixture(0.5.1)——detail 回應。零真實資料:門架碼/車行路線/金額皆手造
+  假值,非任何實際遠通帳戶/車輛/交易。刻意是「裸 <tr> 片段、無外層 <table>」,
+  對齊遠通此端點的真實回應型態(AJAX 局部 HTML)——lib/parse.js parseDetailGantries
+  會自行包一層 <table><tbody>…</tbody></table> 補回合法 table 語境(見該函式檔頭
+  註解),測試檔不需要、也不應該自己包 table。
+  td 順序比照 parse.js:0=checkbox/1=時間/2=路線/3=里程/4=金額(帶「元」)/5=狀態。
+  checkbox id = chkPrint_{idx}_{batchId}_{門架碼}(gantry = id.split('_').slice(3).join('_'))。
+-->
+<tr class="expander-cus" data-level="3" data-date="12:30:45">
+  <td class="checkbox"><input type="checkbox" class="chkPrint" id="chkPrint_1_2607200000000000001_01F0293N"></td>
+  <td class="time">12:30:45</td>
+  <td class="route">五股-高公局</td>
+  <td class="mileage">1.4</td>
+  <td class="amount">7元</td>
+  <td class="status">已收費</td>
+</tr>
+<tr class="expander-cus" data-level="3" data-date="13:15:00">
+  <td class="checkbox"><input type="checkbox" class="chkPrint" id="chkPrint_2_2607200000000000001_01H0350S"></td>
+  <td class="time">13:15:00</td>
+  <td class="route">機場系統-五股</td>
+  <td class="mileage">2.3</td>
+  <td class="amount">12元</td>
+  <td class="status">已收費</td>
+</tr>
+<tr class="expander-cus" data-level="3" data-date="14:00:10">
+  <td class="checkbox"><input type="checkbox" class="chkPrint" id="chkPrint_3_2607200000000000001_03F0498N"></td>
+  <td class="time">14:00:10</td>
+  <td class="route">高公局-中和</td>
+  <td class="mileage">3.1</td>
+  <td class="amount">15元</td>
+  <td class="status">已收費</td>
+</tr>

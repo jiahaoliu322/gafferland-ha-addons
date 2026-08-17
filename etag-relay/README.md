@@ -5,50 +5,66 @@ Home Assistant add-on:遠通(FETC)eTag 通行明細中繼服務。
 ## 為什麼需要這個
 
 Gafferland 網站的 Vercel 部署(境外 IP)被遠通電收(FETC)網路層擋(連 `fetc.net.tw`
-都連線逾時),且遠通會員登入頁有 4 碼圖形驗證碼 + reCAPTCHA v3。實測結論(Round G1):
-v3 擋的是「自動化瀏覽器觸發送出」這個動作本身,不論 4 碼是誰填的都一樣判定成機器人——
-因此登入唯一路徑是老闆本人透過 noVNC 遠端畫面,親手操作中繼容器裡的瀏覽器完成登入。這個
-add-on 跑在使用者家中的 Home Assistant(台灣住宅 IP),作為 Vercel `cron-etag` 與遠通
-之間的中繼:
-
-```
-Vercel cron-etag ──(Cloudflare Tunnel + Access)──▶ etag-relay(HA)──▶ fetc.net.tw
-                 ◀───── transactions/total/PDF 用列印 HTML ─────────
-```
-
-**查詢本身不需要瀏覽器**——2026-07-26 實測(E0)證實遠通的通行明細查詢三步驟
+都連線逾時)。這個 add-on 跑在使用者家中的 Home Assistant(台灣住宅 IP),作為 Vercel
+`cron-etag` 與遠通之間的中繼——**查詢本身不需要瀏覽器**:通行明細查詢三步驟
 (`UX050506` 搜尋 → `UX050507` 明細 → `UX050508` 列印)全程用 session cookie 純
-HTTP POST 即可,回應是乾淨的 server-rendered HTML(cheerio 可解)。瀏覽器
-(playwright)只在「登入 session 失效、需要重新登入」時才會啟動,平時中繼是輕量
-Node process。
+HTTP POST 即可,回應是乾淨的 server-rendered HTML(cheerio 可解)。
+
+session(登入態)的取得則靠**人**:遠通會員登入頁有圖形驗證碼 + reCAPTCHA v3,自動化
+沒有安全路徑繞過,所以改成使用者自己在家用電腦的 Chrome 正常登入一次遠通會員區,
+點一下 `fetc-session-bridge` 擴充功能,把登入後的 cookies 送進 Gafferland 站台、
+再轉發給這個中繼(見下方架構圖第二條線)。中繼本體全程是輕量 Node process,不含
+瀏覽器,也不含任何遠端桌面畫面。
 
 ## 架構
 
 ```
+Vercel cron-etag ──(Cloudflare Tunnel + Access)──▶ etag-relay(HA)──▶ fetc.net.tw
+                 ◀───── transactions/total/PDF 用列印 HTML ─────────
+
+使用者 Chrome(fetc-session-bridge 擴充,已登入 fetc.net.tw)
+   │  點擴充「更新 session」
+   ▼
+Gafferland 站台 API(轉發,擴充本身不直打中繼)
+   │  Cloudflare Tunnel
+   ▼
+etag-relay  POST /session  ──真驗證(getAntiForgeryToken)通過才生效──▶ 換 jar/存檔
+                                                                    │
+                                                                    ▼
+                                                     fire-and-forget 回呼 Vercel
+                                                     (mode:'success',觸發補跑結算)
+```
+
+檔案樹:
+
+```
 etag-relay/
-├── config.yaml       add-on manifest(HA 用)
-├── Dockerfile         base = mcr.microsoft.com/playwright:v1.62.0-jammy
-├── package.json       deps: cheerio(解析)+ playwright(登入流程用瀏覽器)
+├── config.yaml       add-on manifest(HA 用;version 變更見檔頭 changelog)
+├── Dockerfile         base = node:20-bookworm-slim(釘 digest)
+├── package.json       deps: cheerio(HTML 解析)
 ├── server.js          Node 內建 http server,路由見下
 ├── lib/
-│   ├── fetc-client.js  遠通 HTTP 查詢客戶端(anti-forgery token/search/detail/print/resolveCin)
-│   ├── parse.js        HTML 解析器(cheerio)
-│   └── login.js        playwright 登入流程骨架(session 失效時才用)
-├── test-parse.js       本機解析器驗證腳本(需搭配真實回應檔,見下)
-└── test-inline.js      print 資產內嵌驗證腳本(同上)
+│   ├── fetc-client.js  遠通 HTTP 查詢客戶端(anti-forgery token/search/detail/print/
+│   │                    resolveCin/keep-alive/PDF)
+│   └── parse.js        HTML 解析器(cheerio)
+├── fixtures/           測試用合成 HTML(零真實資料;search/detail/print 三份)
+├── test-parse.js       lib/parse.js 本機驗證(讀 fixtures/,離線)
+├── test-inline.js      print 資產內嵌驗證(stub fetch,離線)
+├── README.md
+└── DEPLOY.md
 ```
 
 ## API
 
-所有端點皆為 `POST`/`GET` JSON。
+所有端點皆為 `POST`/`GET` JSON,皆需 `X-Relay-Secret` header(與 `RELAY_SECRET`
+add-on 設定一致,timing-safe 比對)。
 
-| 端點 | 驗證 | 說明 |
-|---|---|---|
-| `POST /query` | `X-Relay-Secret` | `{plate, startDate, endDate, skipPrint?}` → `{ok, transactions, total, printHtml}`;`skipPrint:true` 跳過遠通 print 步驟、回應**不含** `printHtml` 這欄(只要 transactions/total 時省一次遠通呼叫+2MB);未帶 `skipPrint`=行為不變。session 失效回 `{ok:false, reason:'session-expired'}` |
-| `POST /print` | `X-Relay-Secret` | Round H1。`{plate, startDate, endDate, times}`(`times`=要收款的門架時間戳子集,`'yyyy/MM/dd HH:mm:ss'`,與 `/query` 回應 `transactions[].timeStr` 同格式)→ 開 headless 瀏覽器進遠通**真**列印頁、按遠通自己的下載按鈕取得原生 PDF。成功 `{ok:true, pdfBase64, via:'fetc-button'\|'page-pdf', printTotal}`(`printTotal` 取不到給 `null`);失敗 `{ok:false, reason:'no-rows'\|'session-expired'\|'pdf-failed'}` |
-| `GET /health` | `X-Relay-Secret` | `{ok, sessionValid, lastKeepAlive, vncUrl, ...}`(`vncUrl` 是帶 token 的 noVNC 完整連結) |
-| `POST /login` | `X-Relay-Secret` | 手動觸發登入流程(唯一路徑=真人 noVNC);`{ok, started, inFlight, mode:'manual'}` |
-| `POST /session` | `X-Relay-Secret` | 內部用:登入流程寫回 session cookie |
+| 端點 | 說明 |
+|---|---|
+| `POST /query` | `{plate, startDate, endDate, skipPrint?}` → 三步查詢鏈 → `{ok:true, transactions, total, printHtml}`。`skipPrint:true` 跳過遠通 print 步驟、回應**不含** `printHtml` 這欄(只要 transactions/total 時省一次遠通呼叫 + 內嵌資產動輒 2MB);未帶 `skipPrint` 行為不變。session 失效回 `{ok:false, reason:'session-expired'}`,其餘失敗回 `{ok:false, reason:'cin-not-found'\|'internal-error'}` |
+| `POST /print` | `{plate, startDate, endDate, times}`(`times` = 要收款的門架時間戳子集,`'yyyy/MM/dd HH:mm:ss'`,與 `/query` 回應 `transactions[].timeStr` 同格式)→ 純 HTTP 復刻遠通「下載PDF文件」打包,POST 遠通 `UX000006GetPDF` 由**遠通伺服器**生成原生 PDF。成功 `{ok:true, pdfBase64, via:'fetc-native', printTotal}`(`printTotal` 取不到給 `null`);失敗 `{ok:false, reason:'no-rows'\|'session-expired'\|'pdf-failed'}` |
+| `GET /health` | `{ok:true, sessionValid, lastKeepAlive}` |
+| `POST /session` | 瀏覽器擴充功能(經站台轉發)餵入新 session。`{cookies}`(陣列 `[{name,value}]` 或物件 `{name:value}` 皆可)→ 先用 `getAntiForgeryToken` 真驗證這組 cookies 真的能打會員頁,驗不過回 `400 {ok:false, reason:'session-invalid'}`(不蓋既有 jar/不存檔);驗證通過才換上全域 jar、存檔、回應 `{ok:true, verified:true}`,回應送出後 fire-and-forget 回呼 Vercel(`mode:'success'`,觸發補跑結算) |
 
 ## 認證機制(遠通端)
 
@@ -61,56 +77,78 @@ etag-relay/
 - session 失效的訊號 = 被導回登入頁(`lib/fetc-client.js
   looksLikeLoginRedirect`)。
 
-## print 資產內嵌(E1 中繼收尾,2026-07-26)
+## session 生命週期
+
+- **保溫(keep-alive)**:啟動後每 ~10 分鐘 ping 一次會員頁(借用
+  `getAntiForgeryToken` 的登入頁重導向偵測),成功即更新 `lastKeepAlive` 並存檔
+  (遠通 ping 回應可能帶 `Set-Cookie` 續期,不存回等於白 ping)。啟動當下也會立即
+  驗一次,補上「重啟後要空等 10 分鐘才發現失效」的盲區。
+- **失效**:keep-alive、`/query`、`/print` 任一撞到 session 失效都只會 `console.log`
+  (`noteSessionDead`),**不會**自動觸發任何登入流程——那條路徑已隨 0.5.0 拆除。是否
+  提醒使用者,交給 Vercel 端「有單才提醒」的邏輯處理。
+- **恢復**:唯一路徑是使用者重新從 `fetc-session-bridge` 擴充餵一次 cookies 進
+  `POST /session`(見上方架構圖)。
+
+## print 資產內嵌
 
 `lib/fetc-client.js inlinePrintAssets(html, jar)`:queryAll 拿到列印 HTML 後自動呼叫,
 把 `<link rel=stylesheet>`(換 `<style>`)、CSS 內 `url(...)` 背景圖(如遠通 logo,實測是
 `.logo{background-image:url(../images/logo.png)}` 而非 `<img>`)、`<img src>` 全部換成
 `<style>`/`data:` 內嵌,`<script src>` 一律移除(純列印用途不需要互動 JS,且 Vercel 對
-fetc.net.tw 網域不可達,留著只會造成無謂請求)。驗證見 `test-inline.js`(對 scratchpad
-`fetc-print-resp.txt` 跑,斷言零殘留 `/Content` 相對路徑、含 `<style>`/`data:image`)。
+fetc.net.tw 網域不可達,留著只會造成無謂請求)。驗證見 `test-inline.js`(對合成的列印
+HTML 片段跑,`globalThis.fetch` 用 stub 攔截資產請求,零真實資料、零網路;斷言零殘留
+`/Content` 相對路徑、含 `<style>`/`data:image`)。
 
-## PDF 產生(Round H1,`/print`)
+## PDF 產生(`/print`)
 
-鐵則(使用者裁示):PDF 是收款憑證,**必須是遠通自己生成的檔案**。E0 實測列印頁上的
+鐵則(使用者裁示):PDF 是收款憑證,**必須是遠通自己生成的檔案**。實測列印頁上的
 「下載PDF文件」按鈕按下去無任何網路請求=瀏覽器端由遠通頁面自己的 JS 生成 PDF(有文字層,
-天然含 CJK)。之前 Vercel 端用 serverless chromium 把中繼回的 `printHtml` 另外
-render 成 PDF 踩了兩個雷:①serverless 無 CJK 字型,PDF 中文全消失;②`print` 傳了整日
-全部門架時間戳,PDF 混入租期外的通行紀錄。
+天然含 CJK)。
 
-`/print` 的做法(0.3.8 起全純 HTTP,不開瀏覽器):
+`/print` 的做法(全純 HTTP):
 
 1. 純 HTTP 準備(`lib/fetc-client.js buildDateTimeMapForTimes`):search → 逐批 detail →
    只保留請求 `times` 集合內的時間戳,組出「裁切過」的 `dateTimeMap`——送進遠通列印端點
    的 payload 從一開始就不含租期外的紀錄。⚠ search 必須帶完整表單參數(rdoRatingDate/
-   weekend/gantry/payment 全套),缺了會回空表、後續 print 直接 500(2026-07-27 實測)。
+   weekend/gantry/payment 全套),缺了會回空表、後續 print 直接 500。
 2. `print()` 拿**原始**列印 HTML(含站方 script,不可先 inline)。
 3. `generateNativePdf()`:復刻站方「下載PDF文件」按鈕 JS 的打包(剝 script/pre、URL 絕對化、
    包完整 HTML、base64)→ POST 遠通 `/UX0000Common/UX000006GetPDF` → **遠通伺服器生成
    原生 PDF 回傳**(含電子憑證專用章、文字層,與會員手動下載完全同源)。`via:'fetc-native'`。
 4. 刻意**沒有任何自家渲染 fallback**:PDF 是收款憑證,寧可失敗回 `pdf-failed`(Vercel 記
-   pdfError、代收列照寫),也不把非原生件掛上客戶憑證欄。
+   pdfError、代收列照寫,之後可還原重出),也不把非原生件掛上客戶收款憑證欄。
 5. `printTotal` 用 `lib/parse.js parsePrintRows` 解列印 HTML 總計列,供 Vercel 對數。
 
-## 已知待驗證項目(E1-a 只寫骨架,列於程式碼 TODO)
+## 限流
 
-- `resolveCin`(車牌→加密車 id):端點/HTML 結構未經 E0 實測,`lib/fetc-client.js`
-  裡是推測骨架。
-- `lib/login.js` 整支(登入頁 DOM 選擇器、reCAPTCHA v3 token 擷取時機、驗證碼
-  提交後成功/失敗判斷、keep-alive ping 目標、v3 token 是否擋 headless):本輪
-  (E1-a/收尾)只 correct-by-construction 寫好+接線(server.js triggerLogin 已串
-  keep-alive 失效/查詢失效/首次啟動無 session 三個觸發點),**無法在本機安全跑真
-  登入**(避免鎖帳號),需 HA 活 session/實機驗證(E1-d)後校正選擇器與時機。
-- anti-forgery token 來源頁 `TOKEN_SOURCE_PATH`(目前用 `/Member/Setting`)未
-  100% 確認一定存在且未登入會 302。
+`lib/fetc-client.js` 三個對遠通的 fetch(`rawFetch`/`fetchAssetBuffer`/
+`generateNativePdf`)皆有逾時與回應大小上限,避免遠通異常/掛起時把中繼(以及等待中的
+Vercel 呼叫端)一起拖死;`lib/parse.js` 三個解析函式皆有列數上限,避免非預期回應內容
+爆量吃記憶體/CPU。超限行為:fetch 逾時/過大直接 `throw`(落既有錯誤處理,`/query` 轉
+`internal-error`、`/print` 轉 `pdf-failed`、資產內嵌單一資產失敗降級不擋整體);解析器
+超限則是**截斷 + `console.warn`,不 `throw`**(回應契約沒有 `too-many-rows` 這個
+reason,截斷後仍回可用的部分結果比 500 斷結算更友善)。
+
+| 項目 | 逾時 | 大小上限 |
+|---|---|---|
+| `rawFetch`(search/detail/token 等一般 HTML) | 30s | 10MB |
+| `fetchAssetBuffer`(單一 print 資產:css/img/font) | 20s | 5MB |
+| `generateNativePdf`(遠通生成 PDF) | 60s | 20MB |
+
+| 解析函式 | 列數上限 | 論證基準 |
+|---|---|---|
+| `parseSearchBatches` | 100 批 | 一次查詢窗涵蓋的天數(批次數) |
+| `parseDetailGantries` | 500 列 | 單日單批實測 93 列,5 倍以上寬鬆空間 |
+| `parsePrintRows` | 5000 列 | 整段租期量級(93 × 30 天 ≈ 2790) |
 
 ## 本機測試
 
 ```bash
-npm install
+npm ci                            # 依 package-lock.json 精確安裝(CI/映像建置同款)
 node --check server.js lib/*.js   # 語法檢查
-node test-parse.js                # 解析器驗證(需搭配 E0 真實回應檔,見檔頭註解)
-node test-inline.js                # print 資產內嵌驗證(同上,活 session 沙盒可達 fetc.net.tw 才會抓到真資產)
+npm test                          # = node test-parse.js && node test-inline.js
+                                   # 全離線:fixtures/ 三份合成 HTML(零真實資料)+
+                                   # stub fetch,不打任何網路、不需真實遠通回應檔
 ```
 
 部署方式見 `DEPLOY.md`。

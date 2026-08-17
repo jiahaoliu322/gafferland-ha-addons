@@ -20,6 +20,18 @@ const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
+// ── 限流常數(0.5.1)──────────────────────────────────────────────────────
+// timeout:遠通 server 掛起/網路異常時避免請求無限卡住,拖垮中繼與 Vercel 呼叫端的
+// 逾時鏈(AbortSignal.timeout 是 Node 18+ 標準 API,罩住整個請求含 body 讀取,不需
+// 手動 clearTimeout)。size cap:防禦性上限(非預期回應內容爆量時避免單一請求把
+// 中繼記憶體/頻寬吃爆),數值取「正常回應數倍」的寬鬆值,不影響正常運作。
+const FETCH_TIMEOUT_MS = 30000; // search/detail/token 等一般 HTML 回應
+const ASSET_TIMEOUT_MS = 20000; // print 資產(css/img/font)單檔逾時
+const PDF_TIMEOUT_MS = 60000; // 遠通伺服器生成 PDF 較慢,給更長時限
+const MAX_HTML_BYTES = 10 * 1024 * 1024; // 一般 HTML 回應(search/detail/token/print HTML)
+const MAX_ASSET_BYTES = 5 * 1024 * 1024; // 單一 print 資產(css/img/font)
+const MAX_PDF_BYTES = 20 * 1024 * 1024; // 遠通生成的 PDF
+
 // 任何一個「已登入才看得到」的會員頁面,用來取新鮮 anti-forgery field token。
 // (2026-07-27 活 session 實測:路徑存在,未登入導回登入頁=偵測 session 失效的依據。)
 const TOKEN_SOURCE_PATH = '/Member/Setting';
@@ -104,6 +116,7 @@ async function rawFetch(jar, path, { method = 'GET', body, headers = {} } = {}) 
   const resp = await fetch(url, {
     method,
     redirect: 'follow',
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     headers: {
       'User-Agent': UA,
       Cookie: jar.header(),
@@ -112,7 +125,20 @@ async function rawFetch(jar, path, { method = 'GET', body, headers = {} } = {}) 
     body,
   });
   jar.ingest(resp.headers);
+  // 軟檢:回應宣告的 content-length 先擋一波(省下讀整包 body 的成本)。
+  const lenHeader = resp.headers.get('content-length');
+  if (lenHeader && Number(lenHeader) > MAX_HTML_BYTES) {
+    const err = new Error(`response-too-large:content-length=${lenHeader}`);
+    err.code = 'RESPONSE_TOO_LARGE';
+    throw err;
+  }
   const html = await resp.text();
+  // 硬檢兜底:chunked 回應無 content-length 時,讀完才知道實際大小。
+  if (Buffer.byteLength(html, 'utf8') > MAX_HTML_BYTES) {
+    const err = new Error(`response-too-large:actual=${Buffer.byteLength(html, 'utf8')}`);
+    err.code = 'RESPONSE_TOO_LARGE';
+    throw err;
+  }
   return { resp, html, finalUrl: resp.url };
 }
 
@@ -280,11 +306,19 @@ function toAbsoluteUrl(refUrl, baseForRelative) {
 // 回 {buf, contentType}。失敗直接 throw,由呼叫端決定降級策略。
 async function fetchAssetBuffer(jar, absUrl) {
   const resp = await fetch(absUrl, {
+    signal: AbortSignal.timeout(ASSET_TIMEOUT_MS),
     headers: { 'User-Agent': UA, Cookie: jar.header() },
   });
   if (!resp.ok) throw new Error(`asset-fetch-failed:${resp.status}`);
   jar.ingest(resp.headers);
+  const lenHeader = resp.headers.get('content-length');
+  if (lenHeader && Number(lenHeader) > MAX_ASSET_BYTES) {
+    throw new Error(`asset-too-large:content-length=${lenHeader}`);
+  }
   const arrayBuf = await resp.arrayBuffer();
+  if (arrayBuf.byteLength > MAX_ASSET_BYTES) {
+    throw new Error(`asset-too-large:actual=${arrayBuf.byteLength}`);
+  }
   const contentType = resp.headers.get('content-type') || guessContentType(absUrl);
   return { buf: Buffer.from(arrayBuf), contentType };
 }
@@ -469,6 +503,7 @@ async function generateNativePdf(jar, fieldToken, printHtml) {
   const resp = await fetch(BASE + GETPDF_PATH + '?&r=' + Date.now(), {
     method: 'POST',
     redirect: 'follow',
+    signal: AbortSignal.timeout(PDF_TIMEOUT_MS),
     headers: {
       'User-Agent': UA,
       Cookie: jar.header(),
@@ -478,7 +513,18 @@ async function generateNativePdf(jar, fieldToken, printHtml) {
     body: formBody({ content, __RequestVerificationToken: fieldToken }),
   });
   jar.ingest(resp.headers);
+  const lenHeader = resp.headers.get('content-length');
+  if (lenHeader && Number(lenHeader) > MAX_PDF_BYTES) {
+    const err = new Error(`GetPDF 回應過大(content-length=${lenHeader})`);
+    err.code = 'PDF_FAILED';
+    throw err;
+  }
   const buf = Buffer.from(await resp.arrayBuffer());
+  if (buf.length > MAX_PDF_BYTES) {
+    const err = new Error(`GetPDF 回應過大(實際 ${buf.length} bytes)`);
+    err.code = 'PDF_FAILED';
+    throw err;
+  }
   const ct = resp.headers.get('content-type') || '';
   if (!resp.ok || buf.subarray(0, 5).toString() !== '%PDF-') {
     const err = new Error(`GetPDF 回應非 PDF(status=${resp.status}, type=${ct}, size=${buf.length})`);
