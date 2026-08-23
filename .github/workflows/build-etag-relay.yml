@@ -26,6 +26,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 批K8(2026-08-23):build 前先跑測試——test-parse/test-inline 0.5.1 起已離線化
+      # (合成 fixtures+stub fetch),但 CI 上從未執行過;測試紅=不建映像不推 ghcr。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: relay tests
+        working-directory: etag-relay
+        run: node test-parse.js && node test-inline.js
+
       # 版本號以 config.yaml 為單一事實來源,避免兩處各寫一份而對不上
       - id: meta
         run: |
