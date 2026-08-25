@@ -112,10 +112,13 @@ async function onUpdateSession() {
         "success",
         "✅ session 已更新!若已過當日 06:50,系統正在自動補跑結算,結果會推 LINE。"
       );
-    } else if (res.status === 403) {
+    } else if (res.status === 403 || res.status === 401) {
+      // 伺服器有明確 error 文案（如 CSRF 守門）就照實顯示，別一律誤導成「未登入」
       showMessage(
         "error",
-        "請先在這個 Chrome 登入 Gafferland 後台,再回來重試。",
+        (data && data.error)
+          ? `後台拒絕（HTTP ${res.status}）：${data.error}`
+          : "請先在這個 Chrome 登入 Gafferland 後台,再回來重試。",
         { text: "開啟後台", url: `${baseUrl}/collect` }
       );
     } else if (res.status === 400 || (data && data.reason === "session-invalid")) {
