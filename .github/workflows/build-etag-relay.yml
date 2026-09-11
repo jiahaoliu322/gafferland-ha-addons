@@ -14,6 +14,7 @@ on:
     branches: [main]
     paths:
       - 'etag-relay/**'
+      - '!etag-relay/**.md'
       - '.github/workflows/build-etag-relay.yml'
   workflow_dispatch:
 
@@ -31,6 +32,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: install deps
+        working-directory: etag-relay
+        run: npm ci
       - name: relay tests
         working-directory: etag-relay
         run: node test-parse.js && node test-inline.js
