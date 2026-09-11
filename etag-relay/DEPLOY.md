@@ -1,5 +1,7 @@
 # 部署步驟(使用者操作)
 
+> 本文件的主機名／tunnel 名稱以佔位符表示,實際值見私有 docs(不上傳)。
+
 ## 部署模型
 
 映像不在 HA 上 build——HA 本機 build 曾經卡死且無從診斷(見
@@ -52,19 +54,19 @@ Home Assistant → **設定 →附加元件 →附加元件商店** → 右上�
 
 ## 4. Cloudflare Tunnel Public Hostname + Access
 
-前提:`Gafferland_tunnel` 已 HEALTHY。
+前提:`<你的 tunnel 名稱>` 已 HEALTHY。
 
-1. Cloudflare Zero Trust → Networks → Tunnels → `Gafferland_tunnel` → **Public
+1. Cloudflare Zero Trust → Networks → Tunnels → `<你的 tunnel 名稱>` → **Public
    Hostname** → 新增:
    - Subdomain: `etag-relay`
-   - Domain: `gafferland.net`
+   - Domain: `<你的網域>`
    - Service: `HTTP://localhost:8099`(HA 主機上 add-on 對外的 port)
 2. Zero Trust → Access → Applications → 新增一個 Application 保護
-   `etag-relay.gafferland.net`:
+   `<RELAY_HOST>`(例:`etag-relay.example.com`):
    - **Service Auth**(service token)方式,只讓帶正確 Client ID/Secret 的請求
      (Vercel)進得來。產生 service token 後記下 `CF_ACCESS_CLIENT_ID` /
      `CF_ACCESS_CLIENT_SECRET`,待會填進 Vercel env。
-3. `etag-relay.gafferland.net/health` 用 curl 帶 `X-Relay-Secret` 應回
+3. `<RELAY_HOST>/health` 用 curl 帶 `X-Relay-Secret` 應回
    `{"ok":true,...}`(driving through Access 需另帶 `CF-Access-Client-Id` /
    `CF-Access-Client-Secret` header,視 Access 規則設定)。
 
@@ -74,7 +76,7 @@ Vercel 專案 → Settings → Environment Variables 新增:
 
 | 變數 | 值 |
 |---|---|
-| `ETAG_RELAY_URL` | `https://etag-relay.gafferland.net` |
+| `ETAG_RELAY_URL` | `https://<RELAY_HOST>` |
 | `ETAG_RELAY_SECRET` | 與 add-on `RELAY_SECRET` 一致 |
 | `CF_ACCESS_CLIENT_ID` | 步驟 4 產生的 service token ID |
 | `CF_ACCESS_CLIENT_SECRET` | 步驟 4 產生的 service token secret |
@@ -95,7 +97,7 @@ Add-on 啟動後 session 是空的,需要使用者手動餵入一次(之後靠 k
 5. 擴充把 cookies 送進 Gafferland 站台 → 站台轉發到這個中繼的 `POST /session`
    → 中繼用 `getAntiForgeryToken` 真驗證,通過才生效。add-on Log 應出現
    `[etag-relay] /session 收到新 session,驗證通過,已存檔並回呼 Vercel`。
-6. `curl -H "X-Relay-Secret: ..." https://etag-relay.gafferland.net/health`
+6. `curl -H "X-Relay-Secret: ..." https://<RELAY_HOST>/health`
    確認 `sessionValid` 轉為 `true`。
 
 疑難排解(403 / session 無效)見 `fetc-session-bridge/README.md`。
@@ -103,7 +105,7 @@ Add-on 啟動後 session 是空的,需要使用者手動餵入一次(之後靠 k
 ## 驗收
 
 - Add-on Log 顯示啟動成功、無例外。
-- `curl -H "X-Relay-Secret: ..." https://etag-relay.gafferland.net/health` 回
+- `curl -H "X-Relay-Secret: ..." https://<RELAY_HOST>/health` 回
   `{"ok":true,"sessionValid":false,...}`(尚未餵入 session 前 `sessionValid` 應為
   `false`,這是預期行為)。
 - 完成上方「建立/更新 session」步驟後,`sessionValid` 應轉為 `true`。
