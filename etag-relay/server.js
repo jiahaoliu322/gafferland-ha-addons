@@ -22,6 +22,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { CookieJar, resolveCin, queryAll, buildDateTimeMapForTimes, print, generateNativePdf } = require('./lib/fetc-client');
+const { startSiteIpHeartbeat } = require('./lib/siteip-heartbeat');
 
 // ── 設定(HA add-on options 由 supervisor 注入 /data/options.json,本機開發
 // 則走環境變數 fallback,方便未部署前先 `node server.js` 對語法/路由 smoke test)──
@@ -36,6 +37,7 @@ try {
     RELAY_SECRET: process.env.RELAY_SECRET || '',
     VERCEL_CAPTCHA_URL: process.env.VERCEL_CAPTCHA_URL || '',
     VERCEL_CALLBACK_SECRET: process.env.VERCEL_CALLBACK_SECRET || '',
+    PUNCH_SITEIP_URL: process.env.PUNCH_SITEIP_URL || '',
   };
 }
 
@@ -49,6 +51,10 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 // 存的只有 cookie 名稱/值(session token 本身),不含帳密。
 let jar = new CookieJar();
 let sessionMeta = { lastKeepAlive: null, plateCinCache: {} };
+
+// 店內 IP 心跳(0.6.0):啟動前 /health 尚未跑過 startSiteIpHeartbeat,先給一個回傳空狀態
+// 的 getter 佔位,避免 handleHealth 在啟動極早期(理論上不會發生,但保守起見)拿到 undefined。
+let siteIpHeartbeat = { getStatus: () => ({ lastOkAt: null, lastIp: null }) };
 
 function loadSession() {
   try {
@@ -315,6 +321,7 @@ async function handleHealth(req, res) {
     ok: true,
     sessionValid,
     lastKeepAlive: sessionMeta.lastKeepAlive,
+    siteIpHeartbeat: siteIpHeartbeat.getStatus(),
   });
 }
 
@@ -419,6 +426,10 @@ if (require.main === module) {
     // 已無功能用途)——舊版以 options.FETC_ACCOUNT 當閘門,哪天使用者清掉帳密設定會讓
     // 保溫無聲停擺,故移除。
     scheduleKeepAlive();
+    // 店內 IP 心跳(0.6.0):每 5 分鐘 POST Vercel 一次,讓打卡 Wi-Fi 判定知道目前店內
+    // 對外 IP。零新密鑰:沿用既有 VERCEL_CAPTCHA_URL(取 origin)與 VERCEL_CALLBACK_SECRET。
+    // 未設定時 sendSiteIpHeartbeat 內部回 not-configured,不影響其餘功能。
+    siteIpHeartbeat = startSiteIpHeartbeat(options);
     // 啟動即驗一次 session——keep-alive 是 setInterval,第一次檢查在啟動後 10 分鐘;
     // 重啟後的失效盲區(session 已死卻要空等 10 分鐘才發現)靠這裡補。與 keep-alive
     // 同一把尺(getAntiForgeryToken);空 jar 天然驗不過。失效只走 noteSessionDead

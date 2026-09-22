@@ -13,6 +13,9 @@ push `etag-relay/**` 到 `main` 會自動 build + push 映像到
 **⚠ 每次改 `etag-relay/` 底下任何內容,一定要同時把 `config.yaml` 的 `version` 往上
 bump**,否則新映像雖然推上 ghcr,HA 端 tag 對不上、永遠不會抓到新版本。
 
+- **0.6.0**:新增「店內 IP 心跳」(見 `README.md` 同名章節與下方步驟 3 的
+  `PUNCH_SITEIP_URL` 說明)。HA 端只需按「更新」,零新必填設定。
+
 ## 1. 建 GitHub repo
 
 把這個 `etag-relay/` 資料夾整個推成一個新的 GitHub repo(比照
@@ -49,6 +52,7 @@ Home Assistant → **設定 →附加元件 →附加元件商店** → 右上�
 | `VERCEL_CAPTCHA_URL` | ⚠ 別被舊名字誤導,**不是**驗證碼用途了——`POST /session` 驗證通過、換上新 session 後,relay 回呼這個 Vercel URL(`etag-captcha` 端點,實際路徑以 Vercel 端實作為準)觸發「有單即自動補跑結算」 |
 | `VERCEL_CALLBACK_SECRET` | 中繼呼叫 Vercel `etag-captcha` 時帶的 `secret` 欄位值(需與 Vercel 端 `ETAG_RELAY_CALLBACK_SECRET` 一致) |
 | `PUBLIC_BASE_URL` | ⚠ 已停用,選填。舊版曾用來組驗證碼圖片端點的完整 URL,該端點已隨登入流程一併拆除,程式碼不再讀取這個值 |
+| `PUNCH_SITEIP_URL` | 0.6.0 新增,選填,一般留空。店內 IP 心跳(每 5 分鐘 POST Vercel 一次目前店內對外 IP,供員工打卡 Wi-Fi 判定)的目的地 URL 覆寫——不填時預設由 `VERCEL_CAPTCHA_URL` 取 origin 推導出 `/api/punch?action=site-ip`,只有 Vercel 端點路徑改變時才需要填 |
 
 存檔後啟動 add-on,看「Log」分頁確認 `[etag-relay] listening on :8099`。
 

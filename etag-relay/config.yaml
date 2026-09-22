@@ -1,5 +1,12 @@
 name: "eTag Relay v3"
-version: "0.5.1"
+version: "0.6.0"
+# 0.6.0(店內 IP 心跳):新增 lib/siteip-heartbeat.js,啟動後每 5 分鐘 POST 一次店內對外
+# IP 給 Vercel(api/punch?action=site-ip),供員工打卡 Wi-Fi 判定比對來源 IP。零新密鑰、
+# 零新必填選項——沿用既有 VERCEL_CAPTCHA_URL(取 origin)與 VERCEL_CALLBACK_SECRET;
+# schema 新增選填 PUNCH_SITEIP_URL(僅供覆寫目的地 URL,一般不需要設定,不進 options
+# 預設)。/health 回應加 siteIpHeartbeat:{lastOkAt,lastIp}。心跳打到尚未上線的 Vercel
+# action 只會在 log warn(HTTP 4xx),不影響其餘功能;既有四條路由與 notifyVercel 邏輯
+# 零改動。
 # 0.5.1(批 G:CI／文件／限流收尾):engines 隨 cheerio 1.2.0 實際需求 >=18→>=20.18.1
 # (package.json/package-lock.json 同步手改);Dockerfile 改 npm ci(要求 lock 存在且與
 # package.json 完全同步,fail-fast)、FROM 加 node:20-bookworm-slim digest pin;
@@ -122,6 +129,9 @@ schema:
   RELAY_SECRET: password
   VERCEL_CAPTCHA_URL: str
   VERCEL_CALLBACK_SECRET: password
+  # 0.6.0:店內 IP 心跳目的地 URL 覆寫,選填——一般留空即可(預設由 VERCEL_CAPTCHA_URL
+  # 取 origin 推導),不進 options 預設值。
+  PUNCH_SITEIP_URL: str?
   # ↓ 0.5.0 已停用(登入/VNC 拆除,程式不再讀取),但使用者既有設定裡還存著這些 key——
   # Supervisor 會拿 schema 驗證使用者設定,直接從 schema 刪除可能讓更新後 add-on 起不來。
   # 保留為選填讓舊設定通過驗證,等使用者從 UI 清掉欄位後的下個版本再移除。

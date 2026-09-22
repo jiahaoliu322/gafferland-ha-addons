@@ -37,7 +37,7 @@ jobs:
         run: npm ci
       - name: relay tests
         working-directory: etag-relay
-        run: node test-parse.js && node test-inline.js
+        run: node test-parse.js && node test-inline.js && node test-heartbeat.js
 
       # 版本號以 config.yaml 為單一事實來源,避免兩處各寫一份而對不上
       - id: meta

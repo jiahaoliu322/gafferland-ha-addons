@@ -44,12 +44,14 @@ etag-relay/
 ├── package.json       deps: cheerio(HTML 解析)
 ├── server.js          Node 內建 http server,路由見下
 ├── lib/
-│   ├── fetc-client.js  遠通 HTTP 查詢客戶端(anti-forgery token/search/detail/print/
-│   │                    resolveCin/keep-alive/PDF)
-│   └── parse.js        HTML 解析器(cheerio)
+│   ├── fetc-client.js       遠通 HTTP 查詢客戶端(anti-forgery token/search/detail/print/
+│   │                         resolveCin/keep-alive/PDF)
+│   ├── siteip-heartbeat.js  店內 IP 心跳(每 5 分鐘 POST Vercel,供打卡 Wi-Fi 判定)
+│   └── parse.js             HTML 解析器(cheerio)
 ├── fixtures/           測試用合成 HTML(零真實資料;search/detail/print 三份)
 ├── test-parse.js       lib/parse.js 本機驗證(讀 fixtures/,離線)
 ├── test-inline.js      print 資產內嵌驗證(stub fetch,離線)
+├── test-heartbeat.js   店內 IP 心跳驗證(stub fetch + 可注入 timer,離線)
 ├── README.md
 └── DEPLOY.md
 ```
@@ -63,7 +65,7 @@ add-on 設定一致,timing-safe 比對)。
 |---|---|
 | `POST /query` | `{plate, startDate, endDate, skipPrint?}` → 三步查詢鏈 → `{ok:true, transactions, total, printHtml}`。`skipPrint:true` 跳過遠通 print 步驟、回應**不含** `printHtml` 這欄(只要 transactions/total 時省一次遠通呼叫 + 內嵌資產動輒 2MB);未帶 `skipPrint` 行為不變。session 失效回 `{ok:false, reason:'session-expired'}`,其餘失敗回 `{ok:false, reason:'cin-not-found'\|'internal-error'}` |
 | `POST /print` | `{plate, startDate, endDate, times}`(`times` = 要收款的門架時間戳子集,`'yyyy/MM/dd HH:mm:ss'`,與 `/query` 回應 `transactions[].timeStr` 同格式)→ 純 HTTP 復刻遠通「下載PDF文件」打包,POST 遠通 `UX000006GetPDF` 由**遠通伺服器**生成原生 PDF。成功 `{ok:true, pdfBase64, via:'fetc-native', printTotal}`(`printTotal` 取不到給 `null`);失敗 `{ok:false, reason:'no-rows'\|'session-expired'\|'pdf-failed'}` |
-| `GET /health` | `{ok:true, sessionValid, lastKeepAlive}` |
+| `GET /health` | `{ok:true, sessionValid, lastKeepAlive, siteIpHeartbeat:{lastOkAt, lastIp}}` |
 | `POST /session` | 瀏覽器擴充功能(經站台轉發)餵入新 session。`{cookies}`(陣列 `[{name,value}]` 或物件 `{name:value}` 皆可)→ 先用 `getAntiForgeryToken` 真驗證這組 cookies 真的能打會員頁,驗不過回 `400 {ok:false, reason:'session-invalid'}`(不蓋既有 jar/不存檔);驗證通過才換上全域 jar、存檔、回應 `{ok:true, verified:true}`,回應送出後 fire-and-forget 回呼 Vercel(`mode:'success'`,觸發補跑結算) |
 
 ## 認證機制(遠通端)
@@ -98,6 +100,29 @@ add-on 設定一致,timing-safe 比對)。
 fetc.net.tw 網域不可達,留著只會造成無謂請求)。驗證見 `test-inline.js`(對合成的列印
 HTML 片段跑,`globalThis.fetch` 用 stub 攔截資產請求,零真實資料、零網路;斷言零殘留
 `/Content` 相對路徑、含 `<style>`/`data:image`)。
+
+## 店內 IP 心跳
+
+員工打卡的 Wi-Fi 判定＝「請求來源 IP 等於店內對外 IP」。店內 IP 浮動,由這個 add-on(跑在
+店內 HA 上,與員工 Wi-Fi 同一個 UDM WAN 出口)每 5 分鐘 POST 一次 Vercel,Vercel 記下
+來源 IP(KV 20 分鐘過期)。
+
+**零新密鑰、零新必填選項**:沿用既有 `VERCEL_CAPTCHA_URL`(取 origin)與
+`VERCEL_CALLBACK_SECRET`(Vercel 端對 `ETAG_RELAY_CALLBACK_SECRET`)。目的地 URL =
+`new URL(VERCEL_CAPTCHA_URL).origin + '/api/punch?action=site-ip'`。若 Vercel 端點路徑
+未來改變,可用選填的 `PUNCH_SITEIP_URL` 直接覆寫完整 URL(一般不需要設定)。
+
+行為(`lib/siteip-heartbeat.js`,啟動段呼叫,server.js 零其餘改動):啟動後 15 秒先送一次,
+之後每 5 分鐘一次;成功且來源 IP 與上次不同才印一行 log(避免洗版),失敗(未設定/HTTP
+非 2xx/逾時/例外)每次都印警告(不含密鑰內容)。日誌長這樣:
+
+```
+[etag-relay] site-ip 心跳 ok ip=1.2.3.4        # 成功且 IP 有變化
+[etag-relay] site-ip 心跳失敗 status=404 reason=-  # 失敗(如 Vercel 端點尚未上線)
+```
+
+`/health` 回應加 `siteIpHeartbeat: {lastOkAt, lastIp}`(`lastIp` 是店內對外 IP,非機密)。
+驗證見 `test-heartbeat.js`(stub `fetchImpl` + 可注入 timer,零網路)。
 
 ## PDF 產生(`/print`)
 
@@ -147,6 +172,7 @@ reason,截斷後仍回可用的部分結果比 500 斷結算更友善)。
 npm ci                            # 依 package-lock.json 精確安裝(CI/映像建置同款)
 node --check server.js lib/*.js   # 語法檢查
 npm test                          # = node test-parse.js && node test-inline.js
+                                   #   && node test-heartbeat.js
                                    # 全離線:fixtures/ 三份合成 HTML(零真實資料)+
                                    # stub fetch,不打任何網路、不需真實遠通回應檔
 ```
