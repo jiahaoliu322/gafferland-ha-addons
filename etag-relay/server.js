@@ -13,6 +13,9 @@
 //                                       getAntiForgeryToken 真驗證(與 keep-alive 同一把尺)
 //                                       通過才換 jar/存檔,回應送出後 fire-and-forget 回呼
 //                                       Vercel(mode:'success')觸發補跑結算
+//   POST /sms     (驗 X-Relay-Secret)  0.7.0:SMS 中繼(every8d 台灣 IP 出口)——收
+//                                       {uid,pwd,sb,msg,dest} 純轉發 lib/sms-forward.js,
+//                                       帳密由 Vercel 每次請求帶入,中繼不存帳密
 //
 // 帳密/cookie/RELAY_SECRET 絕不寫入任何 log 或回應(沿用 gafferland-main sanitize 鐵則)。
 'use strict';
@@ -23,6 +26,7 @@ const path = require('path');
 
 const { CookieJar, resolveCin, queryAll, buildDateTimeMapForTimes, print, generateNativePdf } = require('./lib/fetc-client');
 const { startSiteIpHeartbeat } = require('./lib/siteip-heartbeat');
+const { forwardSms } = require('./lib/sms-forward');
 
 // ── 設定(HA add-on options 由 supervisor 注入 /data/options.json,本機開發
 // 則走環境變數 fallback,方便未部署前先 `node server.js` 對語法/路由 smoke test)──
@@ -124,6 +128,13 @@ function safeEqual(a, b) {
   const bb = Buffer.from(String(b || ''));
   if (ab.length !== bb.length) return false;
   return crypto.timingSafeEqual(ab, bb);
+}
+
+// SMS 中繼(0.7.0)log 用遮罩:手機號碼保留前 4 碼＋後 3 碼,不足 7 碼視為不可辨識全遮
+// (與 gafferland-main lib/mask.js maskPhone 同一遮法,獨立實作——兩個 repo 不跨 require)。
+function maskDest(dest) {
+  const s = String(dest || '').replace(/\D/g, '');
+  return s.length >= 7 ? s.slice(0, 4) + '***' + s.slice(-3) : '***';
 }
 
 function requireSecret(req, res, expected) {
@@ -372,6 +383,35 @@ async function handleSession(req, res) {
     .catch((e) => console.warn('[etag-relay] /session 回呼 Vercel 例外:', e && e.message));
 }
 
+// POST /sms(0.7.0):SMS 中繼(every8d 台灣 IP 出口)。帳密由 Vercel 每次請求帶入
+// {uid,pwd,sb,msg,dest},中繼純轉發 lib/sms-forward.js 不存帳密。回應契約:
+//   成功 200 {ok:true, status, body}(body=e8d 原始回應文字,CSV 格式判讀交回呼叫端
+//   gafferland-main lib/sms.js,與直連分支共用同一套判斷邏輯)
+//   e8d 連不上/逾時 200 {ok:false, reason:'e8d-unreachable'}
+// log 只印遮罩後的 dest 與 HTTP status——pwd/msg(含 OTP 驗證碼)絕不落 log。
+async function handleSms(req, res) {
+  if (!requireSecret(req, res, options.RELAY_SECRET)) return;
+  let body;
+  try {
+    body = await readBody(req);
+  } catch (e) {
+    return sendJson(res, 400, { ok: false, reason: 'bad-request' });
+  }
+  const { uid, pwd, sb, msg, dest } = body;
+  if (!uid || !pwd || !msg || !dest) {
+    return sendJson(res, 400, { ok: false, reason: 'missing-params' });
+  }
+
+  try {
+    const { status, body: text } = await forwardSms({ uid, pwd, sb, msg, dest });
+    console.log(`[etag-relay] /sms dest=${maskDest(dest)} status=${status}`);
+    return sendJson(res, 200, { ok: true, status, body: text });
+  } catch (e) {
+    console.error('[etag-relay] /sms error:', e && e.message); // 訊息本身不含帳密/OTP
+    return sendJson(res, 200, { ok: false, reason: 'e8d-unreachable' });
+  }
+}
+
 // ── HTTP server ──────────────────────────────────────────────────────────
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
@@ -382,6 +422,7 @@ const server = http.createServer((req, res) => {
       if (req.method === 'POST' && url.pathname === '/print') return handlePrint(req, res);
       if (req.method === 'GET' && url.pathname === '/health') return handleHealth(req, res);
       if (req.method === 'POST' && url.pathname === '/session') return handleSession(req, res);
+      if (req.method === 'POST' && url.pathname === '/sms') return handleSms(req, res);
 
       sendJson(res, 404, { ok: false, reason: 'not-found' });
     })

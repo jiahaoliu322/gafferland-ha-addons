@@ -1,5 +1,13 @@
 name: "eTag Relay v3"
-version: "0.6.0"
+version: "0.7.0"
+# 0.7.0(SMS 走 HA 中繼):every8d 擋境外 IP,客服答覆海外解鎖只給固定 IP 白名單——Vercel
+# 沒有固定 IP,直連這條路死了;家中 HA 是台灣住宅 IP,不需要跟 every8d 申請任何東西,直接
+# 掛既有 etag-relay 通道(Cloudflare Tunnel+CF Access+X-Relay-Secret 雙層驗證)即可。新增
+# lib/sms-forward.js(forwardSms,純轉發 GET api.e8d.tw sendSMS.ashx,15s 逾時)、新路由
+# POST /sms(驗 X-Relay-Secret→驗必要欄位→forwardSms→200 {ok:true,status,body} 或
+# {ok:false,reason:'e8d-unreachable'})。**零新密鑰、零新選項**:every8d 帳密(uid/pwd)由
+# Vercel 每次請求帶入,中繼不存帳密,單一事實來源仍在 Vercel(SMS_USER/SMS_PASS);options/
+# schema 零改動。log 只印遮罩後的 dest 與 HTTP status——pwd/msg(含 OTP 驗證碼)絕不落 log。
 # 0.6.0(店內 IP 心跳):新增 lib/siteip-heartbeat.js,啟動後每 5 分鐘 POST 一次店內對外
 # IP 給 Vercel(api/punch?action=site-ip),供員工打卡 Wi-Fi 判定比對來源 IP。零新密鑰、
 # 零新必填選項——沿用既有 VERCEL_CAPTCHA_URL(取 origin)與 VERCEL_CALLBACK_SECRET;
