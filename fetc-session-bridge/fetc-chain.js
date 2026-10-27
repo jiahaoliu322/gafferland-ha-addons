@@ -26,10 +26,25 @@
   const PRINT_PATH = '/UX0505Traffic/UX050508TrafficAdvancedSearchPrint';
   const GETPDF_PATH = '/UX0000Common/UX000006GetPDF';
 
-  function makeErr(code, message) {
+  function makeErr(code, message, path, status) {
     const err = new Error(message || code);
     err.code = code;
+    if (path) err.path = path;
+    if (status !== undefined) err.status = status;
     return err;
+  }
+
+  // 遠通路徑 → 步驟名(診斷訊息用;b4p)
+  const STEP_OF_PATH = {
+    [TOKEN_SOURCE_PATH]: 'token',
+    [MEMBER_VEHICLES_PATH]: 'member',
+    [SEARCH_PATH]: 'search',
+    [DETAIL_PATH]: 'detail',
+    [PRINT_PATH]: 'print',
+    [GETPDF_PATH]: 'getpdf',
+  };
+  function stepOf(path) {
+    return STEP_OF_PATH[path] || 'other';
   }
 
   // ── bytes / base64(大 HTML 不能 String.fromCharCode(...整包))──────────────
@@ -121,14 +136,19 @@
     // 一般 HTML 請求:大小檢查(TextEncoder)＋CF 挑戰偵測。不送 UA/Cookie/Referer。
     async function rawFetch(path, { method = 'GET', body, headers = {} } = {}) {
       const url = path.startsWith('http') ? path : base + path;
-      const resp = await fetchImpl(url, {
-        method,
-        redirect: 'follow',
-        credentials: 'include',
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-        headers: { ...headers },
-        body,
-      });
+      let resp;
+      try {
+        resp = await fetchImpl(url, {
+          method,
+          redirect: 'follow',
+          credentials: 'include',
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+          headers: { ...headers },
+          body,
+        });
+      } catch (e) {
+        throw makeErr('FETCH_FAILED', 'fetch-failed:' + String((e && e.message) || e).slice(0, 80), path);
+      }
       const lenHeader = resp.headers && resp.headers.get('content-length');
       if (lenHeader && Number(lenHeader) > MAX_HTML_BYTES) {
         throw makeErr('RESPONSE_TOO_LARGE', `response-too-large:content-length=${lenHeader}`);
@@ -143,13 +163,13 @@
         P.isCfChallengeBody(resp.status, html) ||
         ((resp.status === 403 || resp.status === 503) && mitigated === 'challenge')
       ) {
-        throw makeErr('CF_CHALLENGE', 'cf-challenge:遠通官網回 Cloudflare 挑戰頁(status=' + resp.status + ')');
+        throw makeErr('CF_CHALLENGE', 'cf-challenge:遠通官網回 Cloudflare 挑戰頁(status=' + resp.status + ')', path, resp.status);
       }
       return { resp, html, finalUrl: resp.url };
     }
 
     async function postForm(path, fields, fieldToken) {
-      const { html, finalUrl } = await rawFetch(path, {
+      const { html, finalUrl, resp } = await rawFetch(path, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
@@ -158,26 +178,26 @@
         },
         body: formBody(fields),
       });
-      if (P.looksLikeLoginRedirect(finalUrl, html)) throw makeErr('LOGIN_REQUIRED', 'login-required');
+      if (P.looksLikeLoginRedirect(finalUrl, html)) throw makeErr('LOGIN_REQUIRED', 'login-required', path, resp.status);
       return html;
     }
 
     // GET 會員頁 → 與目前 cookie 配對的新鮮 field token。被導回登入頁／取不到 → LOGIN_REQUIRED。
     async function getToken() {
-      const { html, finalUrl } = await rawFetch(TOKEN_SOURCE_PATH);
-      if (P.looksLikeLoginRedirect(finalUrl, html)) throw makeErr('LOGIN_REQUIRED', 'login-required');
+      const { html, finalUrl, resp } = await rawFetch(TOKEN_SOURCE_PATH);
+      if (P.looksLikeLoginRedirect(finalUrl, html)) throw makeErr('LOGIN_REQUIRED', 'login-required', TOKEN_SOURCE_PATH, resp.status);
       const token = P.extractFieldToken(html, parseHtml);
-      if (!token) throw makeErr('LOGIN_REQUIRED', 'login-required');
+      if (!token) throw makeErr('LOGIN_REQUIRED', 'login-required:no-token', TOKEN_SOURCE_PATH, resp.status);
       return token;
     }
 
     // 車牌 → cin(快取在注入的 cinCache);查無 → CIN_NOT_FOUND
     async function getCin(plate) {
       if (cinCache[plate]) return cinCache[plate];
-      const { html, finalUrl } = await rawFetch(MEMBER_VEHICLES_PATH);
-      if (P.looksLikeLoginRedirect(finalUrl, html)) throw makeErr('LOGIN_REQUIRED', 'login-required');
+      const { html, finalUrl, resp } = await rawFetch(MEMBER_VEHICLES_PATH);
+      if (P.looksLikeLoginRedirect(finalUrl, html)) throw makeErr('LOGIN_REQUIRED', 'login-required', MEMBER_VEHICLES_PATH, resp.status);
       const cin = P.findCinForPlate(html, plate, parseHtml);
-      if (!cin) throw makeErr('CIN_NOT_FOUND', 'cin-not-found');
+      if (!cin) throw makeErr('CIN_NOT_FOUND', 'cin-not-found', MEMBER_VEHICLES_PATH, resp.status);
       cinCache[plate] = cin;
       return cin;
     }
@@ -268,21 +288,26 @@
       const html = buildPdfContentFromPrintHtml(printHtml, base);
       const content = utf8ToBase64(html);
       // ?&r=<ts> 照抄 Portal.Common.SendToURL(避免快取的網址加鹽)
-      const resp = await fetchImpl(base + GETPDF_PATH + '?&r=' + now(), {
-        method: 'POST',
-        redirect: 'follow',
-        credentials: 'include',
-        signal: AbortSignal.timeout(PDF_TIMEOUT_MS),
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: formBody({ content, __RequestVerificationToken: fieldToken }),
-      });
+      let resp;
+      try {
+        resp = await fetchImpl(base + GETPDF_PATH + '?&r=' + now(), {
+          method: 'POST',
+          redirect: 'follow',
+          credentials: 'include',
+          signal: AbortSignal.timeout(PDF_TIMEOUT_MS),
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: formBody({ content, __RequestVerificationToken: fieldToken }),
+        });
+      } catch (e) {
+        throw makeErr('FETCH_FAILED', 'fetch-failed:' + String((e && e.message) || e).slice(0, 80), GETPDF_PATH);
+      }
       const lenHeader = resp.headers && resp.headers.get('content-length');
       if (lenHeader && Number(lenHeader) > MAX_PDF_BYTES) {
-        throw makeErr('PDF_FAILED', `GetPDF 回應過大(content-length=${lenHeader})`);
+        throw makeErr('PDF_FAILED', `GetPDF 回應過大(content-length=${lenHeader})`, GETPDF_PATH, resp.status);
       }
       const buf = new Uint8Array(await resp.arrayBuffer());
       if (buf.length > MAX_PDF_BYTES) {
-        throw makeErr('PDF_FAILED', `GetPDF 回應過大(實際 ${buf.length} bytes)`);
+        throw makeErr('PDF_FAILED', `GetPDF 回應過大(實際 ${buf.length} bytes)`, GETPDF_PATH, resp.status);
       }
       const head = new TextDecoder().decode(buf.subarray(0, 5));
       if (!resp.ok || head !== '%PDF-') {
@@ -298,12 +323,12 @@
           }
         }
         if (P.isCfChallengeBody(resp.status, text) || ((resp.status === 403 || resp.status === 503) && mitigated === 'challenge')) {
-          throw makeErr('CF_CHALLENGE', 'cf-challenge:GetPDF 回 Cloudflare 挑戰頁(status=' + resp.status + ')');
+          throw makeErr('CF_CHALLENGE', 'cf-challenge:GetPDF 回 Cloudflare 挑戰頁(status=' + resp.status + ')', GETPDF_PATH, resp.status);
         }
         if (head !== '%PDF-' && P.looksLikeLoginRedirect(resp.url, text)) {
-          throw makeErr('LOGIN_REQUIRED', 'login-required');
+          throw makeErr('LOGIN_REQUIRED', 'login-required', GETPDF_PATH, resp.status);
         }
-        throw makeErr('PDF_FAILED', `GetPDF 回應非 PDF(status=${resp.status}, type=${ct}, size=${buf.length})`);
+        throw makeErr('PDF_FAILED', `GetPDF 回應非 PDF(status=${resp.status}, type=${ct}, size=${buf.length})`, GETPDF_PATH, resp.status);
       }
       return buf;
     }
@@ -311,6 +336,24 @@
     // ── 工作層(不 throw;逐車轉 reason)───────────────────────────────────────
     // login-required／cf-challenge 發生後,剩下的車牌不再打,同一 reason 帶出。
     const STOP_REASONS = { 'login-required': 1, 'cf-challenge': 1 };
+
+    // 診斷(b4p):最後一次失敗與 CF 挑戰的步驟／路徑／status。呼叫端(gflPageRunner)據此把
+    // 「分頁內 fetch 被 CF 擋」升成整筆 {ok:false,reason:'cf-challenge',cfPath},並帶 message。
+    let lastFail = null;
+    let lastCf = null;
+    function noteFailure(e, reason) {
+      if (reason === 'cin-not-found' || reason === 'no-rows') return; // 正常業務結果:不當診斷錯誤(也不蓋掉先前真正的錯誤)
+      const path = (e && e.path) || null;
+      const info = {
+        reason,
+        step: path ? stepOf(path) : 'other',
+        path,
+        status: e && e.status !== undefined ? e.status : null,
+        detail: String((e && e.message) || e || '').slice(0, 160),
+      };
+      lastFail = info;
+      if (reason === 'cf-challenge') lastCf = info;
+    }
 
     async function runQueryJob(payload) {
       const { plates, startDate, endDate } = payload;
@@ -334,6 +377,7 @@
           };
         } catch (e) {
           const reason = reasonOf(e);
+          noteFailure(e, reason);
           perPlate[plate] = { ok: false, reason };
           if (STOP_REASONS[reason]) stop = reason;
         }
@@ -397,6 +441,7 @@
           pdfs.push({ plateRaw, ok: true, pdfBase64: bytesToBase64(pdf), printTotal });
         } catch (e) {
           const reason = reasonOf(e);
+          noteFailure(e, reason);
           pdfs.push({ plateRaw, ok: false, reason });
           if (STOP_REASONS[reason]) stop = reason;
         }
@@ -417,6 +462,8 @@
       runQueryJob,
       runPrintJob,
       runScanJob,
+      lastFailure: () => lastFail,
+      lastChallenge: () => lastCf,
     };
   }
 
@@ -428,6 +475,15 @@
     reasonOf,
     fmtDate,
     formBody,
+    stepOf,
+    PATHS: {
+      token: TOKEN_SOURCE_PATH,
+      member: MEMBER_VEHICLES_PATH,
+      search: SEARCH_PATH,
+      detail: DETAIL_PATH,
+      print: PRINT_PATH,
+      getpdf: GETPDF_PATH,
+    },
   };
 
   root.GflFetcChain = api;

@@ -21,16 +21,18 @@ function makeArea(init) {
   };
 }
 
-// opts: { agent, cookies, windows(已有視窗數), probe(()=>page state), runJob(job)=>pageRunner 回傳, tabStatus }
+// opts: { agent, cookies(陣列或函式), windows(已有視窗數), probe((tab,tabId)=>page state), runJob(job)=>pageRunner 回傳, tabStatus,
+//         onNavigate(tabId,url,state)(tabs.update 導航時), onSubmitForm(action,state,tabId)(過驗證 POST 表單送出時) }
+// state.downloads:假的下載清單({id,url,finalUrl,startTime,state});calls.downloads 記 cancel/removeFile/erase
 function makeFakeChrome(opts) {
   const o = opts || {};
-  const calls = { tabsCreated: [], tabsRemoved: [], windowsCreated: [], windowsRemoved: [], injected: [], tabsUpdated: [], scriptWire: [] };
-  const state = { nextId: 100, tabs: new Map(), probe: o.probe || (() => ({ url: 'https://www.fetc.net.tw/Member', title: '會員專區', text: 'ok', hasLoginForm: false })) };
+  const calls = { tabsCreated: [], tabsRemoved: [], windowsCreated: [], windowsRemoved: [], injected: [], tabsUpdated: [], scriptWire: [], formSubmits: [], downloads: [] };
+  const state = { nextId: 100, tabs: new Map(), downloads: [], probe: o.probe || (() => ({ url: 'https://www.fetc.net.tw/Member', title: '會員專區', text: 'ok', hasLoginForm: false })) };
   const local = makeArea(o.agent ? { agent: o.agent } : {});
   const session = makeArea();
   const chrome = {
     storage: { local, session },
-    cookies: { async getAll() { return o.cookies === undefined ? [{ name: 'FETC_P', value: 'x' }] : o.cookies; } },
+    cookies: { async getAll() { return o.cookies === undefined ? [{ name: 'FETC_P', value: 'x' }] : typeof o.cookies === 'function' ? o.cookies() : o.cookies; } },
     tabs: {
       async create(p) {
         const t = { id: state.nextId++, status: 'complete', url: p.url };
@@ -43,7 +45,15 @@ function makeFakeChrome(opts) {
         if (!t) throw new Error('No tab');
         return t;
       },
-      async update(id, p) { calls.tabsUpdated.push({ id, ...p }); return state.tabs.get(id); },
+      async update(id, p) {
+        calls.tabsUpdated.push({ id, ...p });
+        const t = state.tabs.get(id);
+        if (t && p.url) {
+          t.url = p.url;
+          if (o.onNavigate) o.onNavigate(id, p.url, state);
+        }
+        return t;
+      },
       async remove(id) { calls.tabsRemoved.push(id); state.tabs.delete(id); },
     },
     windows: {
@@ -55,6 +65,15 @@ function makeFakeChrome(opts) {
         return { id: 900, tabs: [t] };
       },
       async remove(id) { calls.windowsRemoved.push(id); },
+      async get(id) {
+        return { id, tabs: [...state.tabs.values()].filter((t) => t.windowId === id).map((t) => ({ ...t })) };
+      },
+    },
+    downloads: {
+      async search() { return state.downloads.map((d) => ({ ...d })); },
+      async cancel(id) { calls.downloads.push(['cancel', id]); },
+      async removeFile(id) { calls.downloads.push(['removeFile', id]); },
+      async erase(q) { calls.downloads.push(['erase', q.id]); state.downloads = state.downloads.filter((d) => d.id !== q.id); },
     },
     scripting: {
       async executeScript(inj) {
@@ -64,7 +83,12 @@ function makeFakeChrome(opts) {
           calls.injected.push({ files: inj.files, world: inj.world, tabId: inj.target.tabId });
           return [];
         }
-        if (inj.func === core.gflProbePage) return [{ result: state.probe() }];
+        if (inj.func === core.gflProbePage) return [{ result: await state.probe(state.tabs.get(inj.target.tabId), inj.target.tabId) }];
+        if (inj.func === core.gflSubmitPdfForm) {
+          calls.formSubmits.push({ tabId: inj.target.tabId, world: inj.world, action: inj.args[0] });
+          if (o.onSubmitForm) o.onSubmitForm(inj.args[0], state, inj.target.tabId);
+          return [{ result: { ok: true } }];
+        }
         if (inj.func === core.gflPageRunner) {
           const job = inj.args[0];
           calls.injected.push({ job: job.id, world: inj.world, tabId: inj.target.tabId });
@@ -107,9 +131,10 @@ function build(opts, handlers, extra) {
     hostPatterns: HOSTS,
     now: () => clock,
     sleep: async (ms) => { sleeps.push(ms); clock += ms; },
+    probeTimer: extra && extra.probeTimer,
     timer: (extra && extra.timer) || { set: (fn, ms) => { timerFires.push({ fn, ms }); return timerFires.length; }, clear() {} },
   });
-  return { core: c, ...fake, site, sleeps, timerFires };
+  return { core: c, ...fake, site, sleeps, timerFires, clock: () => clock };
 }
 
 module.exports = { makeFakeChrome, makeFakeSite, build, AGENT, HOSTS };

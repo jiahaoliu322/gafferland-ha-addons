@@ -20,6 +20,8 @@ let mode = null; // 'login' | 'update'
 const agentVal = document.getElementById("agentVal");
 const fetcVal = document.getElementById("fetcVal");
 const lastRunVal = document.getElementById("lastRunVal");
+const lastErrRow = document.getElementById("lastErrRow");
+const lastErrVal = document.getElementById("lastErrVal");
 const cfHint = document.getElementById("cfHint");
 const runBtn = document.getElementById("runBtn");
 const runNote = document.getElementById("runNote");
@@ -39,7 +41,7 @@ async function initAgent() {
 }
 
 async function renderAgent() {
-  const stored = await chrome.storage.local.get(["agent", "lastRun", "fetcState"]);
+  const stored = await chrome.storage.local.get(["agent", "lastRun", "fetcState", "lastError"]);
   const agent = stored.agent && stored.agent.token ? stored.agent : null;
   let loggedIn = false;
   try {
@@ -71,6 +73,16 @@ async function renderAgent() {
     setVal(lastRunVal, `${t} ${GflAgentCore.lastRunText(lr)}`, lr.ok === false ? "bad" : "");
   } else {
     setVal(lastRunVal, "尚未執行過", "");
+  }
+
+  // 最後錯誤(步驟＋status,agent-core 已去 HTML、≤200 字)
+  const le = stored.lastError;
+  if (le && le.message) {
+    const t = new Date(le.at).toLocaleString("zh-TW", { hour12: false });
+    setVal(lastErrVal, `${t} ${le.message}`, "bad");
+    lastErrRow.style.display = "";
+  } else {
+    lastErrRow.style.display = "none";
   }
 
   const cf = (stored.fetcState && stored.fetcState.state) === "cf-interactive";

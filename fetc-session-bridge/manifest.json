@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Gafferland eTag Session",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "遠通電收會員區的 eTag 通行明細與收款憑證,由這台電腦的 Chrome 代為查詢並交回 Gafferland 站台(另保留舊中繼 session 更新備援)。",
   "permissions": [
     "alarms",
     "cookies",
+    "downloads",
     "scripting",
     "storage",
     "tabs",

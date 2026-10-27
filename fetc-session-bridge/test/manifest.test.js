@@ -8,10 +8,10 @@ const ROOT = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
 const manifest = JSON.parse(read('manifest.json'));
 
-test('manifest:version 2.0.0、權限清單、background service worker', () => {
-  assert.equal(manifest.version, '2.0.0');
+test('manifest:version 2.0.1、權限清單、background service worker', () => {
+  assert.equal(manifest.version, '2.0.1');
   assert.equal(manifest.manifest_version, 3);
-  assert.deepEqual([...manifest.permissions].sort(), ['alarms', 'clipboardWrite', 'cookies', 'scripting', 'storage', 'tabs']);
+  assert.deepEqual([...manifest.permissions].sort(), ['alarms', 'clipboardWrite', 'cookies', 'downloads', 'scripting', 'storage', 'tabs']);
   assert.deepEqual(manifest.background, { service_worker: 'background.js' });
   assert.ok(fs.existsSync(path.join(ROOT, manifest.background.service_worker)));
 });
@@ -121,4 +121,63 @@ test('b4r:onStartup 會清遺留 cfTab', () => {
   const m = /onStartup\.addListener\(([\s\S]*?)\n\}\);/.exec(bg);
   assert.ok(m, '找不到 onStartup listener');
   assert.match(m[1], /clearStaleTab\(\)/);
+});
+
+// b4q P1:cf_clearance 指紋(cfCookieSig／sig0／sig1)只能在記憶體裡做「前後是否換發」的比較,
+// 不得出現在 log／console 引數、local.set、postResult body、executeScript args,也不得進任何其他表達式。
+function callArgsOf(src, re) {
+  const out = [];
+  let m;
+  while ((m = re.exec(src))) {
+    let i = re.lastIndex;
+    const start = i;
+    let depth = 1;
+    let q = null;
+    while (i < src.length && depth > 0) {
+      const c = src[i];
+      if (q) {
+        if (c === '\\') i++;
+        else if (c === q) q = null;
+      } else if (c === "'" || c === '"' || c === '`') q = c;
+      else if (c === '(') depth++;
+      else if (c === ')') depth--;
+      i++;
+    }
+    out.push(src.slice(start, i - 1));
+  }
+  return out;
+}
+const SIG_SINKS = /(?<![\w$])(?:log|console\.\w+|[\w.]*\.set|postResult|callSite|recordRun|executeScript|sanitizeMessage)\s*\(/g;
+function sigLeaks(src) {
+  const bad = [];
+  for (const a of callArgsOf(src, new RegExp(SIG_SINKS.source, 'g'))) {
+    if (/\bsig[01]\b|cfCookieSig/.test(a)) bad.push('sink: ' + a.slice(0, 80));
+  }
+  // 白名單:cfCookieSig( 只出現在函式宣告、`const sigN = await cfCookieSig();`、`(await cfCookieSig()) !== sigN`
+  const rest = src
+    .replace(/async function cfCookieSig\(\)/g, '')
+    .replace(/const sig[01] = await cfCookieSig\(\);/g, '')
+    .replace(/\(await cfCookieSig\(\)\) !== sig[01]/g, '');
+  if (/cfCookieSig/.test(rest)) bad.push('cfCookieSig 出現在白名單以外');
+  if (/\bsig[01]\b/.test(rest)) bad.push('sig0／sig1 出現在白名單以外');
+  return bad;
+}
+
+test('b4q P1:cf_clearance 指紋不外流(log／console／storage／回報 body／executeScript args 都不得出現)', () => {
+  const src = read('agent-core.js');
+  assert.match(src, /async function cfCookieSig\(\)/, '找不到 cfCookieSig(掃描器壞了?)');
+  assert.match(src, /const sig0 = await cfCookieSig\(\);/);
+  assert.deepEqual(sigLeaks(src), []);
+});
+
+test('b4q P1:sigLeaks 掃描器自測(抓得到各種外流寫法)', () => {
+  const base = "const sig0 = await cfCookieSig();\nconst x = (await cfCookieSig()) !== sig0;\nasync function cfCookieSig() {}\n";
+  assert.deepEqual(sigLeaks(base), []);
+  assert.ok(sigLeaks(base + "log('sig', sig0);").length);
+  assert.ok(sigLeaks(base + "console.log(`${sig0}`);").length);
+  assert.ok(sigLeaks(base + 'await local.set({ lastClearance: { sig: await cfCookieSig() } });').length);
+  assert.ok(sigLeaks(base + 'await postResult(agent, { id: 1, ok: false, reason: sig0 });').length);
+  assert.ok(sigLeaks(base + 'await chrome.scripting.executeScript({ args: [sig0] });').length);
+  assert.ok(sigLeaks(base + 'ex.message = await cfCookieSig();').length);
+  assert.ok(sigLeaks(base + 'const y = sig0;').length);
 });

@@ -27,6 +27,8 @@
   const CF_STEP_MS = 3 * 1000;
   const TAB_LOAD_TIMEOUT_MS = 30 * 1000;
   const TAB_POLL_MS = 500;
+  // 分頁導航一直沒 commit(遠通卡住)時 executeScript 會永遠不回(真 Chromium 實測),探頁要有自己的上限
+  const PROBE_TIMEOUT_MS = 5 * 1000;
   const MAX_JOBS_PER_RUN = 30;
   const RESULT_LIMIT_BYTES = 4 * 1024 * 1024; // Vercel 請求上限 4.5MB
   const POLL_MAX_JOBS = 3;
@@ -37,6 +39,24 @@
   const CIN_MAX_ENTRIES = 200;
   const CIN_MAX_KEY = 20;
   const CIN_MAX_VALUE = 40;
+  // 過驗證(b4p):分頁內 fetch 被 Cloudflare 擋時,整頁導到被擋的路徑(或照原生「列印」整頁 POST)讓 Chrome 過挑戰
+  const FETC_ORIGIN = 'https://www.fetc.net.tw';
+  const GETPDF_PATH = '/UX0000Common/UX000006GetPDF';
+  // 頁面回報的 cfPath 只收這些(＝fetc-chain.js 會打的路徑);其他一律不導航
+  const CF_PATHS = [
+    '/Member',
+    '/Member/Setting',
+    '/UX0505Traffic/UX050506TrafficAdvancedSearch',
+    '/UX0505Traffic/UX050507AdvancedSearchDetail',
+    '/UX0505Traffic/UX050508TrafficAdvancedSearchPrint',
+    GETPDF_PATH,
+  ];
+  const CF_CLEARANCE_COOKIE = 'cf_clearance';
+  const MESSAGE_MAX = 200;
+  // 只有這幾種才算「真正的錯誤」寫進 pendingError／popup 最後錯誤;cin-not-found／no-rows 是正常業務結果
+  const REAL_ERROR_REASONS = ['cf-challenge', 'login-required', 'pdf-failed', 'error'];
+  const MSG_CF_CLICK = '請到遠通分頁點一下驗證';
+  const MSG_CF_RETRY = '遠通驗證沒能自動通過,下一輪會再試(分頁上若有驗證請點一下)';
 
   // ── 純函式 ──────────────────────────────────────────────────────────────────
 
@@ -79,6 +99,62 @@
     if (u.protocol !== 'https:') return false;
     const h = u.hostname.toLowerCase();
     return h === 'fetc.net.tw' || h.endsWith('.fetc.net.tw');
+  }
+
+  // 診斷訊息:只收字串、去 HTML 標籤、壓空白、≤200 字
+  function sanitizeMessage(m) {
+    if (typeof m !== 'string') return '';
+    return m
+      .replace(/<[^>]*>?/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, MESSAGE_MAX);
+  }
+
+  // 頁面回報的被擋路徑:只收白名單內的值
+  function sanitizeCfPath(p) {
+    return typeof p === 'string' && CF_PATHS.includes(p) ? p : null;
+  }
+
+  // 網址是否就是「本步驟導去的那一頁」:遠通網域、路徑相同(不分大小寫)、r 參數相同
+  function isAtTarget(url, path, r) {
+    let u;
+    try {
+      u = new URL(String(url || ''));
+    } catch (e) {
+      return false;
+    }
+    if (u.origin !== FETC_ORIGIN) return false;
+    if (u.pathname.toLowerCase() !== String(path).toLowerCase()) return false;
+    return r === undefined || u.searchParams.get('r') === String(r);
+  }
+
+  // 下載是否為「過驗證這一步產生的遠通 GetPDF 下載」:網址＝https://www.fetc.net.tw + GETPDF_PATH、
+  // 查詢參數 r＝本步驟表單網址的 r(使用者自己按列印的下載 r 不同,不會被碰),且開始時間 ≥ sinceMs
+  function isOwnPdfDownload(item, sinceMs, r) {
+    if (!item || r === undefined || r === null) return false;
+    const urlOk = [item.url, item.finalUrl].some((x) => {
+      try {
+        const u = new URL(String(x || ''));
+        return (
+          u.origin === FETC_ORIGIN &&
+          u.pathname.toLowerCase() === GETPDF_PATH.toLowerCase() &&
+          u.searchParams.get('r') === String(r)
+        );
+      } catch (e) {
+        return false;
+      }
+    });
+    if (!urlOk) return false;
+    const t = Date.parse(item.startTime);
+    return Number.isFinite(t) && Number.isFinite(sinceMs) && t >= sinceMs;
+  }
+
+  // 這筆工作的結果算不算真正的錯誤:失敗看 reason;成功但有車失敗(message 以 reason 開頭)也看 reason
+  function isRealError(ex) {
+    if (!ex || !ex.message) return false;
+    if (ex.out && ex.out.ok === false) return REAL_ERROR_REASONS.includes(ex.out.reason);
+    return REAL_ERROR_REASONS.some((r) => ex.message === r || ex.message.startsWith(r + ' '));
   }
 
   function sanitizeReason(reason) {
@@ -191,9 +267,48 @@
       else if (job.type === 'scan') data = await chain.runScanJob(payload);
       else if (job.type === 'settle-print' || job.type === 'attach-print') data = await chain.runPrintJob(payload);
       else return { ok: false, reason: 'error', message: 'unknown-type' };
-      return { ok: true, data, cinCache: cache };
+      // 分頁內任何 fetch 被 CF 擋(fetch 層挑戰瀏覽器不會自解)→ 整筆回 cf-challenge＋被擋路徑,交給背景頁過驗證後重跑
+      const cf = typeof chain.lastChallenge === 'function' ? chain.lastChallenge() : null;
+      if (cf) {
+        return {
+          ok: false,
+          reason: 'cf-challenge',
+          message: ('cf-challenge step=' + cf.step + ' status=' + cf.status).slice(0, 200),
+          cfPath: cf.path,
+        };
+      }
+      const out = { ok: true, data, cinCache: cache };
+      const lf = typeof chain.lastFailure === 'function' ? chain.lastFailure() : null;
+      if (lf) out.message = (lf.reason + ' step=' + lf.step + ' status=' + lf.status + ' ' + lf.detail).slice(0, 200);
+      return out;
     } catch (e) {
-      return { ok: false, reason: 'error', message: String((e && e.message) || e).slice(0, 200) };
+      return { ok: false, reason: 'error', message: ('runner ' + String((e && e.message) || e)).slice(0, 200) };
+    }
+  }
+
+  // 過驗證 POST 分支:照遠通原生「列印」整頁送出表單(Portal.Common.SendToURL 同形),讓 Chrome 遇挑戰時走整頁驗證。
+  // content＝極小 HTML 的 base64;__RequestVerificationToken＝頁面現有值。必須自足(會被序列化注入)。
+  function gflSubmitPdfForm(action) {
+    try {
+      const tokEl = document.querySelector('input[name="__RequestVerificationToken"]');
+      const f = document.createElement('form');
+      f.method = 'post';
+      f.action = action;
+      f.style.display = 'none';
+      const add = (n, v) => {
+        const i = document.createElement('input');
+        i.type = 'hidden';
+        i.name = n;
+        i.value = v;
+        f.appendChild(i);
+      };
+      add('content', btoa('<!DOCTYPE html><html><head><meta charset="utf-8"></head><body></body></html>'));
+      add('__RequestVerificationToken', tokEl ? tokEl.value : '');
+      (document.body || document.documentElement).appendChild(f);
+      f.submit();
+      return { ok: true };
+    } catch (e) {
+      return { ok: false };
     }
   }
 
@@ -211,6 +326,11 @@
     };
     const version = d.version || '0.0.0';
     const keepAlive = d.keepAlive || { start() {}, stop() {} };
+    // 探頁逾時用的計時器(與工作逾時的 timer 分開注入)
+    const probeTimer = d.probeTimer || {
+      set: (fn, ms) => setTimeout(fn, ms),
+      clear: (h) => clearTimeout(h),
+    };
     const log = d.log || (() => {});
     const hosts = d.hostPatterns || [];
     const local = chrome.storage.local;
@@ -255,14 +375,17 @@
     async function fetcTabOrNull(tabId) {
       try {
         const t = await chrome.tabs.get(tabId);
-        return t && isFetcUrl(t.url) ? t : null;
+        // 載入中的分頁 url 是 ''、目的地在 pendingUrl(b4s L2)
+        return t && isFetcUrl(t.url || t.pendingUrl) ? t : null;
       } catch (e) {
         return null;
       }
     }
 
-    async function waitTabComplete(tabId) {
+    // 等分頁載完;最多 30 秒,且不超過呼叫端給的 deadline(b4s L3)
+    async function waitTabComplete(tabId, deadline) {
       const t0 = now();
+      const until = Math.min(t0 + TAB_LOAD_TIMEOUT_MS, Number.isFinite(deadline) ? deadline : Infinity);
       for (;;) {
         let t = null;
         try {
@@ -271,18 +394,36 @@
           return false;
         }
         if (t && t.status === 'complete') return true;
-        if (now() - t0 >= TAB_LOAD_TIMEOUT_MS) return false;
+        if (now() >= until) return false;
         await sleep(TAB_POLL_MS);
       }
     }
 
-    async function probePage(tabId) {
+    // 回 {cls:'challenge'|'login'|'ok'|'unknown', url}
+    async function probeInfo(tabId) {
       try {
-        const res = await chrome.scripting.executeScript({ target: { tabId }, func: gflProbePage });
-        return classifyPage(res && res[0] && res[0].result);
+        const res = await new Promise((resolve, reject) => {
+          const h = probeTimer.set(() => reject(new Error('probe-timeout')), PROBE_TIMEOUT_MS);
+          chrome.scripting.executeScript({ target: { tabId }, func: gflProbePage }).then(
+            (v) => {
+              probeTimer.clear(h);
+              resolve(v);
+            },
+            (e) => {
+              probeTimer.clear(h);
+              reject(e);
+            }
+          );
+        });
+        const p = res && res[0] && res[0].result;
+        return { cls: classifyPage(p), url: String((p && p.url) || '') };
       } catch (e) {
-        return 'unknown'; // 頁面正在跳轉等:當作還沒好
+        return { cls: 'unknown', url: '' }; // 頁面正在跳轉等:當作還沒好
       }
+    }
+
+    async function probePage(tabId) {
+      return (await probeInfo(tabId)).cls;
     }
 
     async function openTab() {
@@ -308,24 +449,148 @@
       try {
         const t = await fetcTabOrNull(own.tabId);
         if (!t) return; // 已被關掉,或 id 現在是別的網域的分頁:不碰
-        if (own.windowId != null && (t.windowId == null || t.windowId === own.windowId)) await chrome.windows.remove(own.windowId);
+        let wholeWindow = false;
+        if (own.windowId != null && (t.windowId == null || t.windowId === own.windowId)) {
+          // b4s L1:視窗裡只剩自己的分頁才關整個視窗;使用者把分頁開進(拖進)這個視窗＝只關自己的分頁
+          try {
+            const w = await chrome.windows.get(own.windowId, { populate: true });
+            const tabs = (w && Array.isArray(w.tabs) && w.tabs) || [];
+            wholeWindow = tabs.length > 0 && tabs.every((x) => x.id === own.tabId);
+          } catch (e) {
+            wholeWindow = false;
+          }
+        }
+        if (wholeWindow) await chrome.windows.remove(own.windowId);
         else await chrome.tabs.remove(own.tabId);
       } catch (e) {
         /* 已被使用者關掉 */
       }
     }
 
-    // 等挑戰頁自動通過:每 3 秒看一次,最多 45 秒。回 'ok' | 'login' | 'challenge'
+    // 等挑戰頁自動通過:每 3 秒看一次,最多 45 秒(含等分頁載入的時間,b4s L3)。回 'ok' | 'login' | 'challenge'
     async function settlePage(tabId) {
-      let waited = 0;
+      const deadline = now() + CF_WAIT_MS;
       for (;;) {
-        await waitTabComplete(tabId);
+        const loaded = await waitTabComplete(tabId, deadline);
+        if (!loaded && now() >= deadline) return 'challenge'; // 等滿還沒載完:不再探頁(探頁本身也可能卡 5 秒)
         const c = await probePage(tabId);
         if (c === 'ok' || c === 'login') return c;
-        if (waited >= CF_WAIT_MS) return 'challenge'; // unknown 久了也當卡住
+        if (now() >= deadline) return 'challenge'; // unknown 久了也當卡住
         await sleep(CF_STEP_MS);
-        waited += CF_STEP_MS;
       }
+    }
+
+    // 過驗證用:觀察分頁到了目標頁(路徑＋r 參數)之後,有沒有出現挑戰、之後有沒有變正常。
+    // 最多 45 秒(含載入)。extra() 回 true＝提早結束(POST 分支:已出現本步驟的 GetPDF 下載)。
+    // 回 {result:'ok'|'login'|'challenge'|'timeout'|'extra', saw}
+    async function watchPage(tabId, path, r, extra) {
+      const deadline = now() + CF_WAIT_MS;
+      let saw = false;
+      for (;;) {
+        const loaded = await waitTabComplete(tabId, deadline);
+        if (!loaded && now() >= deadline) return { result: saw ? 'challenge' : 'timeout', saw };
+        const p = await probeInfo(tabId);
+        if (p.cls === 'login') return { result: 'login', saw };
+        if (isAtTarget(p.url, path, r)) {
+          if (p.cls === 'challenge') saw = true;
+          else if (p.cls === 'ok') return { result: 'ok', saw };
+        }
+        if (extra && (await extra())) return { result: 'extra', saw };
+        if (now() >= deadline) return { result: saw ? 'challenge' : 'timeout', saw };
+        await sleep(CF_STEP_MS);
+      }
+    }
+
+    // cf_clearance 的指紋(只在記憶體比對前後是否換發;不存、不 log)
+    async function cfCookieSig() {
+      try {
+        const cs = (await chrome.cookies.getAll({ domain: FETC_COOKIE_DOMAIN })) || [];
+        return cs
+          .filter((c) => c && c.name === CF_CLEARANCE_COOKIE)
+          .map((c) => `${c.domain}|${c.value}|${c.expirationDate || ''}`)
+          .sort()
+          .join(';');
+      } catch (e) {
+        return '';
+      }
+    }
+
+    // 只取消／清除「sinceMs 之後建立、網址是遠通 GetPDF 且 r＝本步驟表單的 r」的下載(過驗證 POST 分支產生的);
+    // 其他下載(含使用者自己按列印的 GetPDF)一律不碰。回清掉幾筆
+    async function purgePdfDownloads(sinceMs, r) {
+      const dl = chrome.downloads;
+      if (!dl || typeof dl.search !== 'function') return 0;
+      let items = [];
+      try {
+        items = (await dl.search({ orderBy: ['-startTime'], limit: 50 })) || [];
+      } catch (e) {
+        return 0;
+      }
+      let n = 0;
+      for (const it of items) {
+        if (!isOwnPdfDownload(it, sinceMs, r)) continue;
+        n++;
+        try {
+          await dl.cancel(it.id);
+        } catch (e) {
+          /* 已完成的下載不能 cancel */
+        }
+        try {
+          await dl.removeFile(it.id);
+        } catch (e) {
+          /* 未完成／已不存在 */
+        }
+        try {
+          await dl.erase({ id: it.id });
+        } catch (e) {
+          /* 已清除 */
+        }
+      }
+      return n;
+    }
+
+    // 過驗證(一輪最多一次)。回 {ok, via:'get'|'post'|null, login?, stuck?, pdfSince?, pdfR?}
+    //   a. GET 整頁導到被擋路徑:看到挑戰且之後變正常(或 cf_clearance 換發)＝通過
+    //   b. GET 沒出現挑戰:回 Member,頁內建 form 整頁 POST 到 GetPDF;同樣觀察挑戰→通過(或本步驟的 GetPDF 下載出現)
+    //   挑戰等滿 45 秒仍在＝stuck(分頁就停在那個挑戰頁,讓人點)
+    async function clearChallenge(tabId, cfPath) {
+      const sig0 = await cfCookieSig();
+      const rA = now();
+      await chrome.tabs.update(tabId, { url: `${FETC_ORIGIN}${cfPath}?&r=${rA}` });
+      const a = await watchPage(tabId, cfPath, rA);
+      if (a.result === 'login') return { ok: false, via: null, login: true };
+      const passedA = a.result === 'ok' && (a.saw || (await cfCookieSig()) !== sig0);
+      if (passedA) return { ok: true, via: 'get' };
+      if (a.saw) return { ok: false, via: null, stuck: true };
+
+      // b. 該路徑只挑 POST:照原生「列印」整頁送出
+      await chrome.tabs.update(tabId, { url: FETC_MEMBER_URL });
+      const m = await settlePage(tabId);
+      if (m === 'login') return { ok: false, via: null, login: true };
+      if (m !== 'ok') return { ok: false, via: null, stuck: true };
+      const since = now();
+      const sig1 = await cfCookieSig();
+      const rB = now();
+      let dlSeen = false;
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          world: 'MAIN',
+          func: gflSubmitPdfForm,
+          args: [`${FETC_ORIGIN}${GETPDF_PATH}?&r=${rB}`],
+        });
+      } catch (e) {
+        return { ok: false, via: null, pdfSince: since, pdfR: rB };
+      }
+      const b = await watchPage(tabId, GETPDF_PATH, rB, async () => {
+        if ((await purgePdfDownloads(since, rB)) > 0) dlSeen = true;
+        return dlSeen;
+      });
+      if ((await purgePdfDownloads(since, rB)) > 0) dlSeen = true;
+      if (b.result === 'login') return { ok: false, via: null, login: true, pdfSince: since, pdfR: rB };
+      const changed = b.saw || (await cfCookieSig()) !== sig1;
+      if (changed && (b.result === 'ok' || dlSeen)) return { ok: true, via: 'post', pdfSince: since, pdfR: rB };
+      return { ok: false, via: null, stuck: b.result === 'challenge', pdfSince: since, pdfR: rB };
     }
 
     async function postResult(agent, body) {
@@ -380,11 +645,52 @@
         JOB_TIMEOUT_MS
       );
       if (r.timedOut) return { out: { ok: false, reason: 'error' }, message: 'job-timeout' };
-      if (r.error) return { out: { ok: false, reason: 'error' }, message: String((r.error && r.error.message) || r.error).slice(0, 200) };
+      if (r.error) return { out: { ok: false, reason: 'error' }, message: sanitizeMessage('execute ' + String((r.error && r.error.message) || r.error)) };
       const res = r.value && r.value[0] && r.value[0].result;
       if (!res) return { out: { ok: false, reason: 'error' }, message: 'no-result' };
-      if (!res.ok) return { out: { ok: false, reason: sanitizeReason(res.reason) }, message: res.message };
-      return { out: { ok: true, data: res.data }, cinCache: sanitizeCinCache(res.cinCache) };
+      if (!res.ok) {
+        const reason = sanitizeReason(res.reason);
+        // 失敗一律帶 message(步驟＋status;頁面沒給就用 reason 本身)
+        const ret = { out: { ok: false, reason }, message: sanitizeMessage(res.message) || reason };
+        if (reason === 'cf-challenge') ret.cfPath = sanitizeCfPath(res.cfPath);
+        return ret;
+      }
+      const ret = { out: { ok: true, data: res.data }, cinCache: sanitizeCinCache(res.cinCache) };
+      const msg = sanitizeMessage(res.message);
+      if (msg) ret.message = msg;
+      return ret;
+    }
+
+    // 工作被 CF 擋(有 cfPath)時:本輪還沒過過驗證就過一次,通過後回 Member 重跑同一筆。
+    // 回 {ex(最終結果), stop?, pdfSince?, pdfR?, stuck?};stop＝'cf-interactive'(分頁留著)或 'login-required';
+    // stuck＝真的停在挑戰頁(有可點的驗證)
+    async function clearAndRetry(own, job, ex, cinCache, ctx) {
+      if (ctx.clearanceUsed) return { ex, stop: 'cf-interactive' }; // 本輪已過過一次:直接停(d)
+      ctx.clearanceUsed = true;
+      let cl;
+      try {
+        cl = await clearChallenge(own.tabId, ex.cfPath);
+      } catch (e) {
+        cl = { ok: false, via: null };
+      }
+      await local.set({ lastClearance: { at: now(), via: cl.ok ? cl.via : null, ok: !!cl.ok } });
+      const pdfSince = cl.pdfSince;
+      const pdfR = cl.pdfR;
+      const fail = (stop) => ({ ex, stop, pdfSince, pdfR, stuck: !!cl.stuck });
+      if (cl.login) return { ex: { ...ex, out: { ok: false, reason: 'login-required' } }, stop: 'login-required', pdfSince, pdfR };
+      if (!cl.ok) return fail('cf-interactive'); // d:分頁停在原地(挑戰頁本身),不導回 Member
+      try {
+        await chrome.tabs.update(own.tabId, { url: FETC_MEMBER_URL });
+      } catch (e) {
+        return fail('cf-interactive');
+      }
+      const page = await settlePage(own.tabId);
+      if (page === 'login') return { ex: { ...ex, out: { ok: false, reason: 'login-required' } }, stop: 'login-required', pdfSince, pdfR };
+      if (page !== 'ok') return fail('cf-interactive');
+      const ex2 = await execJob(own.tabId, job, cinCache);
+      if (pdfSince !== undefined) await purgePdfDownloads(pdfSince, pdfR); // 慢到的 GetPDF 下載也清掉
+      if (ex2.cfPath !== undefined) return { ex: ex2, stop: 'cf-interactive', pdfSince, pdfR }; // 重跑仍被擋(d)
+      return { ex: ex2, pdfSince: undefined, pdfR: undefined };
     }
 
     async function runInner() {
@@ -398,12 +704,18 @@
       let own = null;
       const left = await getLocal('cfTab');
       if (left) {
+        // 上輪停在 POST 挑戰頁:人點過後 Chrome 會下載 GetPDF(網址帶本步驟的 r)。只清 r＝rB 的那份
+        // (使用者自己按列印的 GetPDF 下載 r 不同,不碰);有清到＝視為已通過(分頁可能仍停在挑戰頁)。
+        let ownDl = 0;
+        if (Number.isFinite(left.pdfSince) && Number.isFinite(left.pdfR)) ownDl = await purgePdfDownloads(left.pdfSince, left.pdfR);
         // 核對分頁還在且網域仍是遠通;否則清掉、當作沒有(絕不導航／關閉別人的分頁)
         if (await fetcTabOrNull(left.tabId)) {
-          if ((await probePage(left.tabId)) === 'challenge') {
+          let cls = await probePage(left.tabId);
+          if (cls === 'challenge' && ownDl > 0) cls = 'ok';
+          if (cls === 'challenge') {
             const lp = await pollSite(agent, 'cf-interactive');
             if (lp.revoked) return revokedExit();
-            return recordRun({ state: 'cf-interactive', message: '請到遠通分頁點一下驗證' });
+            return recordRun({ state: 'cf-interactive', message: MSG_CF_CLICK });
           }
           own = { tabId: left.tabId, windowId: null }; // 沿用的分頁:只用 tabs.remove 關
         } else {
@@ -463,15 +775,20 @@
       let done = 0;
       let lastErr = null;
       let keepTab = false;
+      let pdfSince; // 留下的分頁停在 POST 挑戰頁時:之後人點過產生的 GetPDF 下載(r＝pdfR),下一輪清掉
+      let pdfR;
+      let cfStuck = false; // 真的停在挑戰頁(有可點的驗證)→ 訊息請人點;否則用「沒能自動通過」的訊息
       try {
         const page = await settlePage(own.tabId);
         if (page === 'login') stop = 'login-required';
         else if (page === 'challenge') {
           stop = 'cf-interactive';
           keepTab = true;
+          cfStuck = true;
         }
 
         let cinCache = sanitizeCinCache(await getLocal('cinCache'));
+        const ctx = { clearanceUsed: false };
         let guard = 0;
         while (queue.length && guard++ < MAX_JOBS_PER_RUN) {
           const job = queue.shift();
@@ -480,14 +797,27 @@
             if (rr.revoked) return revokedExit();
             continue;
           }
-          const ex = await execJob(own.tabId, job, cinCache);
+          let ex = await execJob(own.tabId, job, cinCache);
+          let cfStop = null;
+          if (ex.cfPath !== undefined) {
+            if (ex.cfPath === null) {
+              cfStop = 'cf-interactive'; // 路徑不在白名單:不導航,照舊停下
+            } else {
+              const cr = await clearAndRetry(own, job, ex, cinCache, ctx);
+              ex = cr.ex;
+              cfStop = cr.stop || null;
+              pdfSince = cr.pdfSince;
+              pdfR = cr.pdfR;
+              if (cr.stuck) cfStuck = true;
+            }
+          }
           if (ex.cinCache) {
             cinCache = sanitizeCinCache({ ...cinCache, ...ex.cinCache });
             await local.set({ cinCache });
           }
-          if (ex.message) lastErr = ex.message;
+          if (ex.message && isRealError(ex)) lastErr = ex.message; // 偏離 6 降噪:cin-not-found／no-rows 這類正常業務結果不算錯誤
           const body = ex.out.ok ? { id: job.id, ok: true, data: ex.out.data } : { id: job.id, ok: false, reason: ex.out.reason };
-          const s = sessionStopOf(ex.out);
+          const s = cfStop || sessionStopOf(ex.out);
           const rr = await postResult(agent, body);
           if (rr.revoked) return revokedExit();
           if (!rr.failed) done++;
@@ -499,13 +829,22 @@
         }
         // 超過單輪上限留下的:放回(不回報,claim 過期自會重領)
       } finally {
-        if (keepTab) await local.set({ cfTab: { tabId: own.tabId, windowId: null } });
-        else await closeOwned(own);
+        if (keepTab) {
+          const cfTab = { tabId: own.tabId, windowId: null };
+          if (Number.isFinite(pdfSince) && Number.isFinite(pdfR)) {
+            cfTab.pdfSince = pdfSince;
+            cfTab.pdfR = pdfR;
+          }
+          await local.set({ cfTab });
+        } else await closeOwned(own);
       }
 
-      if (lastErr) await local.set({ pendingError: String(lastErr).slice(0, 200) });
+      if (lastErr) {
+        const msg = sanitizeMessage(String(lastErr)) || 'error';
+        await local.set({ pendingError: msg, lastError: { at: now(), message: msg } });
+      }
       if (stop === 'login-required') return recordRun({ count: done, state: 'login-required', message: '遠通需要重新登入' });
-      if (stop === 'cf-interactive') return recordRun({ count: done, state: 'cf-interactive', message: '請到遠通分頁點一下驗證' });
+      if (stop === 'cf-interactive') return recordRun({ count: done, state: 'cf-interactive', message: cfStuck ? MSG_CF_CLICK : MSG_CF_RETRY });
       return recordRun({ count: done, state: 'ok', message: `完成 ${done} 筆工作` });
     }
 
@@ -604,6 +943,7 @@
     JOB_TIMEOUT_MS,
     CF_WAIT_MS,
     CF_STEP_MS,
+    PROBE_TIMEOUT_MS,
     RESULT_LIMIT_BYTES,
     PAGE_FILES,
     ALLOWED_REASONS,
@@ -612,12 +952,19 @@
     isFetcUrl,
     sanitizeReason,
     sanitizeCinCache,
+    sanitizeMessage,
+    sanitizeCfPath,
+    isAtTarget,
+    isOwnPdfDownload,
+    CF_PATHS,
+    GETPDF_PATH,
     classifyPage,
     shrinkResultBody,
     sessionStopOf,
     lastRunText,
     gflProbePage,
     gflPageRunner,
+    gflSubmitPdfForm,
     createAgentCore,
     pairAgent,
   };
