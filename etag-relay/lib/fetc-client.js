@@ -111,6 +111,14 @@ function looksLikeLoginRedirect(finalUrl, html) {
   return false;
 }
 
+// 判斷回應是否為 Cloudflare 挑戰頁(遠通對非真實瀏覽器回 Managed Challenge)。
+// 403/503 + header cf-mitigated: challenge,或 body 含「Just a moment」。
+function isCfChallenge(status, headers, html) {
+  if (status !== 403 && status !== 503) return false;
+  const mitigated = ((headers && headers.get && headers.get('cf-mitigated')) || '').toLowerCase();
+  return mitigated === 'challenge' || /Just a moment/i.test(html || '');
+}
+
 async function rawFetch(jar, path, { method = 'GET', body, headers = {} } = {}) {
   const url = path.startsWith('http') ? path : BASE + path;
   const resp = await fetch(url, {
@@ -139,6 +147,12 @@ async function rawFetch(jar, path, { method = 'GET', body, headers = {} } = {}) 
     err.code = 'RESPONSE_TOO_LARGE';
     throw err;
   }
+  // Cloudflare 挑戰頁:不是 session 問題,獨立 code 讓上層分開回報(訊息不含 cookie/body)。
+  if (isCfChallenge(resp.status, resp.headers, html)) {
+    const err = new Error('cf-challenge:遠通官網回 Cloudflare 挑戰頁(status=' + resp.status + ')');
+    err.code = 'CF_CHALLENGE';
+    throw err;
+  }
   return { resp, html, finalUrl: resp.url };
 }
 
@@ -151,6 +165,7 @@ function extractFieldToken(html) {
 
 // GET 會員頁面 → 拿與目前 cookie 配對的新鮮 field token(並吃回應可能更新的 cookie)。
 // session 失效(被導回登入頁)→ 回 null。
+// 遠通回 Cloudflare 挑戰頁時 rawFetch 會 throw code=CF_CHALLENGE(不是回 null)。
 async function getAntiForgeryToken(jar) {
   const { html, finalUrl } = await rawFetch(jar, TOKEN_SOURCE_PATH);
   if (looksLikeLoginRedirect(finalUrl, html)) return null;
@@ -571,6 +586,7 @@ module.exports = {
   generateNativePdf,
   inlinePrintAssets,
   looksLikeLoginRedirect,
+  isCfChallenge,
   extractFieldToken,
   fmtDate,
   startKeepAlive,

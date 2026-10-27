@@ -1,5 +1,9 @@
 name: "eTag Relay v3"
-version: "0.7.0"
+version: "0.7.1"
+# 0.7.1:分辨遠通 Cloudflare 挑戰(reason cf-challenge／health sessionReason),/sms 與心跳零改動。
+# 遠通 www.fetc.net.tw 對非真實瀏覽器回 Managed Challenge(403+cf-mitigated: challenge),
+# 舊版把挑戰頁當會員頁解析成「session 失效」,使用者白重貼 cookie;現在 rawFetch 偵測到即
+# throw code=CF_CHALLENGE,/session 回 400 cf-challenge、/query /print 回 200 cf-challenge。
 # 0.7.0(SMS 走 HA 中繼):every8d 擋境外 IP,客服答覆海外解鎖只給固定 IP 白名單——Vercel
 # 沒有固定 IP,直連這條路死了;家中 HA 是台灣住宅 IP,不需要跟 every8d 申請任何東西,直接
 # 掛既有 etag-relay 通道(Cloudflare Tunnel+CF Access+X-Relay-Secret 雙層驗證)即可。新增

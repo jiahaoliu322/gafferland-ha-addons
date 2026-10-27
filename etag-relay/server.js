@@ -8,7 +8,7 @@
 //                                       文件」打包,POST 遠通 UX000006GetPDF 由**遠通伺服器**
 //                                       生成原生 PDF(鐵則:PDF 是收款憑證,必須是遠通自己
 //                                       生成的檔案)→ 回 pdfBase64(via:'fetc-native')
-//   GET  /health  (驗 X-Relay-Secret)  存活 + session 有效性
+//   GET  /health  (驗 X-Relay-Secret)  存活 + session 有效性(0.7.1 起多 sessionReason)
 //   POST /session (驗 X-Relay-Secret)  瀏覽器擴充功能餵入新 cookies:先用
 //                                       getAntiForgeryToken 真驗證(與 keep-alive 同一把尺)
 //                                       通過才換 jar/存檔,回應送出後 fire-and-forget 回呼
@@ -235,6 +235,11 @@ async function handleQuery(req, res) {
       noteSessionDead('query-session-expired'); // 純 log(本次查詢仍回失效,下次 cron 補;冪等)
       return sendJson(res, 200, { ok: false, reason: 'session-expired' });
     }
+    if (e && e.code === 'CF_CHALLENGE') {
+      // 0.7.1:遠通官網回 Cloudflare 挑戰頁——中繼被擋,不是 session 問題,不呼叫 noteSessionDead
+      console.warn('[etag-relay] /query 遠通官網回 Cloudflare 挑戰頁(中繼被擋,非 session 問題)');
+      return sendJson(res, 200, { ok: false, reason: 'cf-challenge' });
+    }
     console.error('[etag-relay] /query error:', e && e.message); // 訊息本身不含帳密/cookie
     return sendJson(res, 500, { ok: false, reason: 'internal-error' });
   }
@@ -245,6 +250,7 @@ async function handleQuery(req, res) {
 // 回應契約(Vercel 端按此實作,務必勿改):
 //   成功 {ok:true, pdfBase64, via:'fetc-native', printTotal}
 //   失敗 {ok:false, reason:'no-rows'|'session-expired'|'pdf-failed'}
+//   (0.7.1 起多 'cf-challenge':遠通官網回 Cloudflare 挑戰頁,中繼被擋、非 session 問題)
 // times = Vercel 配對命中、要收款的門架時間戳子集('yyyy/MM/dd HH:mm:ss',與 /query
 // 回應 transactions[].timeStr 同格式)——這正是「PDF 不可混入租期外通行紀錄」鐵則在
 // 請求層的落地:中繼只會把 times 允許的時間戳送進遠通列印端點,不是先印全部再裁切。
@@ -264,7 +270,7 @@ async function handlePrint(req, res) {
   try {
     const cin = await resolvePlateCin(plate);
     if (!cin) {
-      // 契約只開放 no-rows/session-expired/pdf-failed 三種 reason——車輛清單裡找不到
+      // 契約只開放 no-rows/session-expired/pdf-failed(0.7.1 起另有 cf-challenge)——車輛清單裡找不到
       // 這個車牌本質上也是「沒有可印的資料」,歸類 no-rows(不是例外狀況,見工單回報)。
       return sendJson(res, 200, { ok: false, reason: 'no-rows' });
     }
@@ -312,6 +318,10 @@ async function handlePrint(req, res) {
       noteSessionDead('print-session-expired'); // 同 handleQuery,純 log
       return sendJson(res, 200, { ok: false, reason: 'session-expired' });
     }
+    if (e && e.code === 'CF_CHALLENGE') {
+      console.warn('[etag-relay] /print 遠通官網回 Cloudflare 挑戰頁(中繼被擋,非 session 問題)');
+      return sendJson(res, 200, { ok: false, reason: 'cf-challenge' });
+    }
     // 契約沒有 internal-error 這個 reason,一律歸 pdf-failed(訊息本身不含帳密/cookie)。
     console.error('[etag-relay] /print error:', e && e.message);
     return sendJson(res, 200, { ok: false, reason: 'pdf-failed' });
@@ -321,16 +331,21 @@ async function handlePrint(req, res) {
 async function handleHealth(req, res) {
   if (!requireSecret(req, res, options.RELAY_SECRET)) return;
   let sessionValid = false;
+  // 0.7.1:sessionReason——null(有效)/'session-invalid'/'cf-challenge'/'error'
+  let sessionReason = null;
   try {
     const { getAntiForgeryToken } = require('./lib/fetc-client');
     const token = await getAntiForgeryToken(jar);
     sessionValid = !!token;
+    if (!token) sessionReason = 'session-invalid';
   } catch (e) {
     sessionValid = false;
+    sessionReason = e && e.code === 'CF_CHALLENGE' ? 'cf-challenge' : 'error';
   }
   return sendJson(res, 200, {
     ok: true,
     sessionValid,
+    sessionReason,
     lastKeepAlive: sessionMeta.lastKeepAlive,
     siteIpHeartbeat: siteIpHeartbeat.getStatus(),
   });
@@ -366,6 +381,11 @@ async function handleSession(req, res) {
     token = await getAntiForgeryToken(candidateJar);
   } catch (e) {
     token = null;
+    if (e && e.code === 'CF_CHALLENGE') {
+      // 0.7.1:中繼被遠通 Cloudflare 擋,與 cookie 好壞無關;不碰全域 jar/sessionMeta
+      console.log('[etag-relay] /session 遠通官網回 Cloudflare 挑戰頁(中繼被擋,非 session 問題)');
+      return sendJson(res, 400, { ok: false, reason: 'cf-challenge' });
+    }
   }
   if (!token) {
     console.log('[etag-relay] /session 收到新 session,驗證失敗(session-invalid)');
@@ -451,7 +471,11 @@ function scheduleKeepAlive() {
       sessionMeta.lastKeepAlive = Date.now();
       saveSession();
     },
-    onExpired: () => {
+    onExpired: (e) => {
+      if (e && e.code === 'CF_CHALLENGE') {
+        console.warn('[etag-relay] keep-alive:遠通官網回 Cloudflare 挑戰頁(中繼被擋,非 session 問題)');
+        return;
+      }
       console.warn('[etag-relay] keep-alive 偵測到 session 失效');
       noteSessionDead('keep-alive-expired');
     },

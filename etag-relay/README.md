@@ -63,10 +63,10 @@ add-on 設定一致,timing-safe 比對)。
 
 | 端點 | 說明 |
 |---|---|
-| `POST /query` | `{plate, startDate, endDate, skipPrint?}` → 三步查詢鏈 → `{ok:true, transactions, total, printHtml}`。`skipPrint:true` 跳過遠通 print 步驟、回應**不含** `printHtml` 這欄(只要 transactions/total 時省一次遠通呼叫 + 內嵌資產動輒 2MB);未帶 `skipPrint` 行為不變。session 失效回 `{ok:false, reason:'session-expired'}`,其餘失敗回 `{ok:false, reason:'cin-not-found'\|'internal-error'}` |
-| `POST /print` | `{plate, startDate, endDate, times}`(`times` = 要收款的門架時間戳子集,`'yyyy/MM/dd HH:mm:ss'`,與 `/query` 回應 `transactions[].timeStr` 同格式)→ 純 HTTP 復刻遠通「下載PDF文件」打包,POST 遠通 `UX000006GetPDF` 由**遠通伺服器**生成原生 PDF。成功 `{ok:true, pdfBase64, via:'fetc-native', printTotal}`(`printTotal` 取不到給 `null`);失敗 `{ok:false, reason:'no-rows'\|'session-expired'\|'pdf-failed'}` |
-| `GET /health` | `{ok:true, sessionValid, lastKeepAlive, siteIpHeartbeat:{lastOkAt, lastIp}}` |
-| `POST /session` | 瀏覽器擴充功能(經站台轉發)餵入新 session。`{cookies}`(陣列 `[{name,value}]` 或物件 `{name:value}` 皆可)→ 先用 `getAntiForgeryToken` 真驗證這組 cookies 真的能打會員頁,驗不過回 `400 {ok:false, reason:'session-invalid'}`(不蓋既有 jar/不存檔);驗證通過才換上全域 jar、存檔、回應 `{ok:true, verified:true}`,回應送出後 fire-and-forget 回呼 Vercel(`mode:'success'`,觸發補跑結算) |
+| `POST /query` | `{plate, startDate, endDate, skipPrint?}` → 三步查詢鏈 → `{ok:true, transactions, total, printHtml}`。`skipPrint:true` 跳過遠通 print 步驟、回應**不含** `printHtml` 這欄(只要 transactions/total 時省一次遠通呼叫 + 內嵌資產動輒 2MB);未帶 `skipPrint` 行為不變。session 失效回 `{ok:false, reason:'session-expired'}`;遠通官網回 Cloudflare 挑戰頁(中繼被擋、非 session 問題,0.7.1 起)回 `{ok:false, reason:'cf-challenge'}`;其餘失敗回 `{ok:false, reason:'cin-not-found'\|'internal-error'}` |
+| `POST /print` | `{plate, startDate, endDate, times}`(`times` = 要收款的門架時間戳子集,`'yyyy/MM/dd HH:mm:ss'`,與 `/query` 回應 `transactions[].timeStr` 同格式)→ 純 HTTP 復刻遠通「下載PDF文件」打包,POST 遠通 `UX000006GetPDF` 由**遠通伺服器**生成原生 PDF。成功 `{ok:true, pdfBase64, via:'fetc-native', printTotal}`(`printTotal` 取不到給 `null`);失敗 `{ok:false, reason:'no-rows'\|'session-expired'\|'pdf-failed'\|'cf-challenge'}` |
+| `GET /health` | `{ok:true, sessionValid, sessionReason, lastKeepAlive, siteIpHeartbeat:{lastOkAt, lastIp}}`。`sessionReason`(0.7.1 起):`null`(有效)/`'session-invalid'`/`'cf-challenge'`(遠通 Cloudflare 擋住中繼)/`'error'` |
+| `POST /session` | 瀏覽器擴充功能(經站台轉發)餵入新 session。`{cookies}`(陣列 `[{name,value}]` 或物件 `{name:value}` 皆可)→ 先用 `getAntiForgeryToken` 真驗證這組 cookies 真的能打會員頁,驗不過回 `400 {ok:false, reason:'session-invalid'}`(遠通回 Cloudflare 挑戰頁則回 `400 {ok:false, reason:'cf-challenge'}`,與 cookie 好壞無關;兩者皆不蓋既有 jar/不存檔);驗證通過才換上全域 jar、存檔、回應 `{ok:true, verified:true}`,回應送出後 fire-and-forget 回呼 Vercel(`mode:'success'`,觸發補跑結算) |
 
 ## 認證機制(遠通端)
 

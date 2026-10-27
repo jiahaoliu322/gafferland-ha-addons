@@ -122,10 +122,15 @@ async function onUpdateSession() {
         { text: "開啟後台", url: `${baseUrl}/collect` }
       );
     } else if (res.status === 400 || (data && data.reason === "session-invalid")) {
-      showMessage(
-        "error",
-        "遠通 session 無效——請重新登入遠通會員區後再試一次。"
-      );
+      let msg;
+      if (data && data.reason === "cf-challenge") {
+        msg = "遠通官網啟用 Cloudflare 防護,中繼無法通過驗證（不是 cookie 的問題,重新登入遠通也沒用）——請通知管理者。";
+      } else if (!data || !data.error || data.reason === "session-invalid") {
+        msg = "遠通 session 無效——請重新登入遠通會員區後再試一次。";
+      } else {
+        msg = data.error;
+      }
+      showMessage("error", msg);
     } else {
       showMessage(
         "error",
