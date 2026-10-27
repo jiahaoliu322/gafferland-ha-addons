@@ -23,4 +23,4 @@ Chrome 擴充功能。在自己電腦的 Chrome 正常登入遠通電收(fetc.ne
 
 ## 註記
 
-若 Gafferland 正式網域上線(www.gafferland.net),到擴充功能的「設定」把 Base URL 改成正式網域即可,不需重裝擴充功能。
+預設送到 https://admin.gafferland.com;設定頁的 Base URL 留空即用預設,不需手填。1.0.x 存過的舊網址(gafferland.vercel.app、gafferland.net)會自動視同未設定、改送預設網址。

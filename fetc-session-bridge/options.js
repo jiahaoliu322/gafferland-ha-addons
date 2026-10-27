@@ -1,7 +1,9 @@
 // Gafferland eTag Session — options.js
 // 純原生 JS,無外部依賴。
 
-const DEFAULT_BASE_URL = "https://gafferland.vercel.app";
+const DEFAULT_BASE_URL = "https://admin.gafferland.com";
+// 同 popup.js:1.0.x 存過的舊網域視同未設定。
+const LEGACY_BASE_URL_RE = /^https?:\/\/(gafferland\.vercel\.app|(www\.)?gafferland\.net)(\/|$)/i;
 
 const baseUrlInput = document.getElementById("baseUrl");
 const saveBtn = document.getElementById("saveBtn");
@@ -11,7 +13,8 @@ init();
 
 async function init() {
   const stored = await chrome.storage.local.get("baseUrl");
-  baseUrlInput.value = stored.baseUrl || DEFAULT_BASE_URL;
+  const v = (stored.baseUrl || "").trim();
+  baseUrlInput.value = v && !LEGACY_BASE_URL_RE.test(v) ? v : DEFAULT_BASE_URL;
 
   saveBtn.addEventListener("click", onSave);
 }

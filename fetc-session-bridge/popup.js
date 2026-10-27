@@ -1,7 +1,9 @@
 // Gafferland eTag Session — popup.js
 // 純原生 JS,無外部依賴。cookie 值不得寫入 console.log。
 
-const DEFAULT_BASE_URL = "https://gafferland.vercel.app";
+const DEFAULT_BASE_URL = "https://admin.gafferland.com";
+// 1.0.x 存過的舊網域(vercel.app 已停用、manifest 也不再允許)視同未設定,退回預設。
+const LEGACY_BASE_URL_RE = /^https?:\/\/(gafferland\.vercel\.app|(www\.)?gafferland\.net)(\/|$)/i;
 const FETC_COOKIE_DOMAIN = "fetc.net.tw";
 const FETC_LOGIN_COOKIE = "FETC_P";
 
@@ -71,7 +73,8 @@ async function getFlattenedCookies() {
 
 async function getBaseUrl() {
   const stored = await chrome.storage.local.get("baseUrl");
-  return (stored.baseUrl && stored.baseUrl.trim()) || DEFAULT_BASE_URL;
+  const v = (stored.baseUrl || "").trim();
+  return v && !LEGACY_BASE_URL_RE.test(v) ? v : DEFAULT_BASE_URL;
 }
 
 async function onUpdateSession() {
