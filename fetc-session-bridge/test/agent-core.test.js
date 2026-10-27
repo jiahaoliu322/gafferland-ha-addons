@@ -96,7 +96,7 @@ test('result 回 401:清配對並停止', async () => {
   assert.equal(t.calls.tabsRemoved.length, 1);
 });
 
-test('挑戰頁:等 45 秒(每 3 秒看一次)後 cf-interactive,不關分頁,剩下工作回報 cf-interactive', async () => {
+test('挑戰頁(Member 本身是驗證頁):等 45 秒(每 3 秒看一次)後停,留分頁給人處理、不記 cfTab,剩下工作回報 cf-interactive', async () => {
   const t = build(
     { agent: AGENT, probe: () => ({ url: 'https://www.fetc.net.tw/Member', title: 'Just a moment...', text: '', hasLoginForm: false }), runJob: async () => { throw new Error('不該執行'); } },
     { poll: pollOf([job('a'), job('b')]), result: resultOk }
@@ -109,32 +109,41 @@ test('挑戰頁:等 45 秒(每 3 秒看一次)後 cf-interactive,不關分頁,�
   const results = t.site.log.filter((l) => l.action === 'etag-agent-result').map((l) => l.body);
   assert.deepEqual(results, [{ id: 'a', ok: false, reason: 'cf-interactive' }, { id: 'b', ok: false, reason: 'cf-interactive' }]);
   assert.equal(lastRun(t).state, 'cf-interactive');
-  assert.ok(t.local.m.get('cfTab'));
+  assert.equal(lastRun(t).message, '遠通分頁出現驗證,請在那個分頁完成後再按一次「執行」');
+  assert.equal(t.local.m.has('cfTab'), false);
   assert.equal(t.calls.injected.filter((x) => x.files).length, 0);
+  assert.deepEqual(t.calls.tabsUpdated, []);
 });
 
-test('上次留下的挑戰分頁仍未通過:poll 帶 cf-interactive、不領工作、不開新分頁', async () => {
+test('舊版遺留的 cfTab 鍵(分頁仍是驗證頁):完全不理——不探那個分頁、照常 poll 領工作、開新分頁做事', async () => {
+  const probed = [];
   const t = build(
-    { agent: AGENT, probe: () => ({ url: 'https://www.fetc.net.tw/Member', title: 'Just a moment...', text: '', hasLoginForm: false }) },
+    { agent: AGENT, probe: (tab, tabId) => (probed.push(tabId), tabId === 55 ? { url: 'https://www.fetc.net.tw/Member', title: 'Just a moment...', text: '', hasLoginForm: false } : probeOk()), runJob: async () => okQuery },
     { poll: pollOf([job('a')]), result: resultOk }
   );
   t.state.tabs.set(55, { id: 55, status: 'complete', url: 'https://www.fetc.net.tw/Member' });
   await t.local.set({ cfTab: { tabId: 55, windowId: null } });
   await t.core.run();
-  assert.equal(t.site.log.length, 1);
-  assert.equal(t.site.log[0].body.fetcState, 'cf-interactive');
-  assert.equal(t.calls.tabsCreated.length, 0);
-  assert.equal(t.calls.tabsRemoved.length, 0);
+  const polls = t.site.log.filter((l) => l.action === 'etag-agent-poll');
+  assert.equal(polls[0].body.fetcState, 'ok');
+  assert.equal(polls[0].body.max, 10);
+  assert.equal(t.calls.tabsCreated.length, 1);
+  assert.ok(probed.length > 0 && !probed.includes(55), `探過的分頁 ${probed}`);
+  assert.ok(!t.calls.injected.some((x) => x.tabId === 55), '不得對舊分頁注入');
+  assert.ok(!t.calls.tabsRemoved.includes(55));
+  assert.ok(t.state.tabs.has(55));
+  assert.equal(lastRun(t).state, 'ok');
 });
 
-test('上次留下的分頁已通過驗證:沿用它做事,結束後關掉', async () => {
+test('舊 cfTab 指向正常的遠通分頁也不沿用:開新分頁、結束只關新分頁', async () => {
   const t = build({ agent: AGENT, runJob: async () => okQuery }, { poll: pollOf([job('a')]), result: resultOk });
   t.state.tabs.set(55, { id: 55, status: 'complete', url: 'https://www.fetc.net.tw/Member' });
   await t.local.set({ cfTab: { tabId: 55, windowId: null } });
   await t.core.run();
-  assert.equal(t.calls.tabsCreated.length, 0);
-  assert.deepEqual(t.calls.tabsRemoved, [55]);
-  assert.equal(t.local.m.has('cfTab'), false);
+  assert.equal(t.calls.tabsCreated.length, 1);
+  assert.deepEqual(t.calls.tabsRemoved, [100]);
+  assert.ok(t.state.tabs.has(55));
+  assert.deepEqual(t.calls.tabsUpdated, []);
 });
 
 test('分頁是登入頁:login-required、關分頁、剩下工作回報 login-required', async () => {
@@ -164,14 +173,17 @@ test('工作結果帶 login-required:照樣回報、剩下工作不再執行(以
   assert.equal(t.calls.tabsRemoved.length, 1);
 });
 
-test('工作內 cf-challenge:停止本輪、留著分頁', async () => {
+test('憑證工作內 cf-challenge:只擋憑證——照回報 cf-challenge、後面的查詢照做、分頁照關、不記 cfTab', async () => {
+  const ran = [];
   const t = build(
-    { agent: AGENT, runJob: async () => ({ ok: true, data: { pdfs: [{ plateRaw: 'TEST-001', ok: false, reason: 'cf-challenge' }] } }) },
+    { agent: AGENT, runJob: async (j) => { ran.push(j.id); return j.type === 'settle-print' ? { ok: true, data: { pdfs: [{ plateRaw: 'TEST-001', ok: false, reason: 'cf-challenge' }] } } : okQuery; } },
     { poll: pollOf([job('a', 'settle-print'), job('b')]), result: resultOk }
   );
   await t.core.run();
-  assert.equal(t.calls.tabsRemoved.length, 0);
-  assert.ok(t.local.m.get('cfTab'));
+  assert.deepEqual(ran, ['a', 'b']);
+  assert.equal(t.calls.tabsRemoved.length, 1);
+  assert.equal(t.local.m.has('cfTab'), false);
+  assert.equal(t.local.m.get('pdfPending'), true);
   assert.equal(lastRun(t).state, 'cf-interactive');
 });
 
@@ -357,16 +369,26 @@ test('pairAgent 錯碼／限流／網域不允許', async () => {
 
 const probeOk = () => ({ url: 'https://www.fetc.net.tw/Member', title: '會員專區', text: 'ok', hasLoginForm: false });
 
-test('F1:遺留 cfTab 的 id 現在是別的網域的分頁(有 windowId):不導航、不關、cfTab 被清', async () => {
-  const t = build({ agent: AGENT, probe: probeOk }, { poll: pollOf([]), result: resultOk });
+test('F1:遺留 cfTab 的 id 現在是別的網域的分頁(有 windowId):不導航、不關、不探', async () => {
+  // T-2:給一筆工作讓本輪真的開分頁、探頁、執行,再斷言完全不碰撞號的分頁 7 與其視窗 5
+  const probed = [];
+  const t = build(
+    { agent: AGENT, probe: (tab, tabId) => { probed.push(tabId); return probeOk(); }, runJob: async () => okQuery },
+    { poll: pollOf([job('a')]), result: resultOk }
+  );
   await t.local.set({ cfTab: { tabId: 7, windowId: 5 } });
   t.state.tabs.set(7, { id: 7, status: 'complete', url: 'https://bank.example/account', windowId: 5 });
   await t.core.run();
+  assert.equal(t.calls.tabsCreated.length, 1, '本輪真的開了自己的分頁');
+  assert.ok(probed.length > 0 && probed.every((id) => id !== 7), '有探頁,但只探自己開的分頁');
+  assert.deepEqual(t.calls.injected.filter((x) => x.job).map((x) => x.job), ['a']);
+  assert.ok(!t.calls.injected.some((x) => x.tabId === 7), '不對分頁 7 注入');
   assert.deepEqual(t.calls.tabsUpdated, []);
   assert.deepEqual(t.calls.windowsRemoved, []);
-  assert.deepEqual(t.calls.tabsRemoved, []);
-  assert.equal(t.local.m.has('cfTab'), false);
+  assert.ok(!t.calls.tabsRemoved.includes(7), '不關分頁 7');
+  assert.deepEqual(t.calls.tabsRemoved, [100], '只關自己開的分頁');
   assert.ok(t.state.tabs.has(7));
+  assert.equal(lastRun(t).state, 'ok');
 });
 
 test('F1:遺留 cfTab 撞到別的網域的分頁、這輪有工作:另開新分頁做事,不碰那個分頁', async () => {
@@ -382,24 +404,25 @@ test('F1:遺留 cfTab 撞到別的網域的分頁、這輪有工作:另開新分
   assert.equal(lastRun(t).state, 'ok');
 });
 
-test('F1:網域只是長得像(fetc.net.tw.evil.example／http)也不沿用', async () => {
+test('F1:網域只是長得像(fetc.net.tw.evil.example／http)的遺留 cfTab:不碰、不關', async () => {
   for (const url of ['https://www.fetc.net.tw.evil.example/Member', 'http://www.fetc.net.tw/Member', 'about:blank', undefined]) {
     const t = build({ agent: AGENT, probe: probeOk }, { poll: pollOf([]), result: resultOk });
     await t.local.set({ cfTab: { tabId: 7, windowId: null } });
     t.state.tabs.set(7, { id: 7, status: 'complete', url });
     await t.core.run();
-    assert.equal(t.local.m.has('cfTab'), false, String(url));
+    assert.deepEqual(t.calls.tabsUpdated, [], String(url));
     assert.deepEqual(t.calls.tabsRemoved, [], String(url));
   }
 });
 
-test('F1:沿用遠通子網域的舊分頁:結束只用 tabs.remove,絕不 windows.remove(即使 cfTab 記著 windowId)', async () => {
+test('F1:遺留 cfTab 記著遠通分頁＋windowId:不沿用,舊分頁與其視窗都不關', async () => {
   const t = build({ agent: AGENT, runJob: async () => okQuery }, { poll: pollOf([job('a')]), result: resultOk });
   await t.local.set({ cfTab: { tabId: 55, windowId: 5 } });
   t.state.tabs.set(55, { id: 55, status: 'complete', url: 'https://www.fetc.net.tw/Member', windowId: 5 });
   await t.core.run();
   assert.deepEqual(t.calls.windowsRemoved, []);
-  assert.deepEqual(t.calls.tabsRemoved, [55]);
+  assert.ok(!t.calls.tabsRemoved.includes(55));
+  assert.equal(t.calls.tabsRemoved.length, 1);
 });
 
 test('F1:本輪自己開的分頁,結束前被使用者導去別的網域:不關它', async () => {
@@ -418,20 +441,21 @@ test('F1:本輪 windows.create 建的視窗,結束仍是遠通 → windows.remov
   assert.deepEqual(t.calls.windowsRemoved, [900]);
 });
 
-test('F1:cf-interactive 留著的分頁不記 windowId(下輪只會 tabs.remove)', async () => {
+test('F1:驗證頁留著的分頁(本輪建的視窗)不關視窗、也不記任何 cfTab', async () => {
   const t = build(
     { agent: AGENT, windows: 0, probe: () => ({ url: 'https://www.fetc.net.tw/Member', title: 'Just a moment...', text: '', hasLoginForm: false }) },
     { poll: pollOf([job('a')]), result: resultOk }
   );
   await t.core.run();
-  assert.equal(t.local.m.get('cfTab').windowId, null);
+  assert.deepEqual(t.calls.windowsRemoved, []);
+  assert.deepEqual(t.calls.tabsRemoved, []);
+  assert.equal(t.local.m.has('cfTab'), false);
 });
 
-test('F1:clearStaleTab(onStartup 用)清掉 cfTab', async () => {
+test('F1:agent-core 不再有 clearStaleTab(舊鍵 cfTab 由 background 安裝／啟動時一次清掉)', async () => {
   const t = build({ agent: AGENT }, { poll: pollOf([]), result: resultOk });
-  await t.local.set({ cfTab: { tabId: 7, windowId: null } });
-  await t.core.clearStaleTab();
-  assert.equal(t.local.m.has('cfTab'), false);
+  assert.equal(t.core.clearStaleTab, undefined);
+  assert.deepEqual(Object.keys(t.core).sort(), ['clearPairing', 'peek', 'run']);
 });
 
 // ── F3:沿用 cfTab 分支也要處理 401 ─────────────────────────────────────────────

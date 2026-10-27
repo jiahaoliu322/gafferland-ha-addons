@@ -16,9 +16,10 @@ const optionsLink = document.getElementById("optionsLink");
 
 let mode = null; // 'login' | 'update'
 
-// ── 2.0.0 新增:這台電腦(瀏覽器版 eTag 代查)狀態與「立即執行」──
+// ── 這台電腦(瀏覽器版 eTag 代查)狀態與「執行」(2.1.0:平常不自動跑,員工按「執行」才跑)──
 const agentVal = document.getElementById("agentVal");
 const fetcVal = document.getElementById("fetcVal");
+const queueVal = document.getElementById("queueVal");
 const lastRunVal = document.getElementById("lastRunVal");
 const lastErrRow = document.getElementById("lastErrRow");
 const lastErrVal = document.getElementById("lastErrVal");
@@ -37,11 +38,25 @@ async function initAgent() {
   openSettingsBtn.onclick = () => chrome.runtime.openOptionsPage();
   openFetcBtn.onclick = () => chrome.tabs.create({ url: "https://www.fetc.net.tw/Member" });
   runBtn.onclick = onRunNow;
-  await renderAgent();
+  await renderAgent(null);
+  await refreshPeek();
 }
 
-async function renderAgent() {
-  const stored = await chrome.storage.local.get(["agent", "lastRun", "fetcState", "lastError"]);
+// 問背景頁 peek(poll max:0＝只心跳＋取站台統計;不開分頁、不執行工作)
+async function refreshPeek() {
+  let peek = { failed: true };
+  try {
+    const r = await chrome.runtime.sendMessage({ type: "gfl-peek" });
+    if (r && r.ok && r.result && !r.result.error) peek = r.result;
+  } catch (err) {
+    peek = { failed: true };
+  }
+  await renderAgent(peek);
+}
+
+// peek＝null:還在讀;{failed:true}:讀取失敗;否則 {paired,loggedIn,queue,mode}
+async function renderAgent(peek) {
+  const stored = await chrome.storage.local.get(["agent", "lastRun", "fetcState", "lastError", "pdfPending"]);
   const agent = stored.agent && stored.agent.token ? stored.agent : null;
   let loggedIn = false;
   try {
@@ -85,18 +100,38 @@ async function renderAgent() {
     lastErrRow.style.display = "none";
   }
 
-  const cf = (stored.fetcState && stored.fetcState.state) === "cf-interactive";
-  cfHint.style.display = cf ? "block" : "none";
+  // 站台待處理:查詢 N 筆・憑證 M 份(peek 失敗＝讀取失敗)
+  let counts = null;
+  if (!agent) {
+    setVal(queueVal, "—", "");
+  } else if (!peek) {
+    setVal(queueVal, "讀取中…", "");
+  } else if (peek.failed || !peek.queue) {
+    setVal(queueVal, "讀取失敗", "bad");
+  } else {
+    counts = GflAgentCore.queueCounts(peek.queue);
+    setVal(queueVal, `查詢 ${counts.query} 筆・憑證 ${counts.print} 份`, "");
+  }
+
+  // 憑證待補提示只在「已配對 且 pdfPending===true」時顯示(b78f F-3:解除配對後的殘留旗標不顯示)
+  const pdfPending = !!agent && stored.pdfPending === true;
+  cfHint.style.display = pdfPending ? "block" : "none";
 
   if (!agent) {
     runBtn.disabled = true;
     runNote.textContent = "請先到設定頁輸入配對碼。";
   } else if (!loggedIn) {
     runBtn.disabled = true;
-    runNote.textContent = "遠通尚未登入,請先登入遠通會員區。";
+    runNote.textContent = "請先登入遠通會員區，再回來按「執行」。";
   } else {
     runBtn.disabled = false;
-    runNote.textContent = "平常每 5 分鐘自動檢查一次,不必手動執行。";
+    if (counts && counts.print > 0) {
+      runNote.textContent = "建議先在遠通任一筆按「列印」，再按「執行」，憑證會一次補完。";
+    } else if (counts && counts.query === 0) {
+      runNote.textContent = "目前沒有待處理工作。";
+    } else {
+      runNote.textContent = "按「執行」會在背景開遠通分頁處理，做完自動關閉。";
+    }
   }
 }
 
@@ -108,8 +143,8 @@ async function onRunNow() {
   } catch (err) {
     /* 背景頁回應被中斷不影響執行 */
   }
-  runBtn.textContent = "立即執行";
-  await renderAgent();
+  runBtn.textContent = "執行";
+  await refreshPeek();
 }
 
 initAgent();

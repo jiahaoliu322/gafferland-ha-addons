@@ -118,7 +118,7 @@ async function onPair() {
 }
 
 async function onUnpair() {
-  await chrome.storage.local.remove(["agent", "cfTab", "lastRun", "fetcState", "pendingError"]);
+  await chrome.storage.local.remove(["agent", "pdfPending", "lastPeek", "cinCache", "lastRun", "fetcState", "pendingError"]);
   await renderPairState();
   showMsg(pairMsg, "ok", "已解除本機配對;請同時到 /collect 把這台電腦移除。");
 }

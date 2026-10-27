@@ -1,16 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Gafferland eTag Session",
-  "version": "2.0.1",
-  "description": "遠通電收會員區的 eTag 通行明細與收款憑證,由這台電腦的 Chrome 代為查詢並交回 Gafferland 站台(另保留舊中繼 session 更新備援)。",
+  "version": "2.1.0",
+  "description": "遠通電收會員區的 eTag 通行明細與收款憑證,由員工按「執行」時在這台電腦已登入的遠通分頁內代為查詢並產生收款憑證，交回 Gafferland 站台（平常不自動連線）。",
   "permissions": [
-    "alarms",
+    "clipboardWrite",
     "cookies",
     "downloads",
     "scripting",
     "storage",
-    "tabs",
-    "clipboardWrite"
+    "tabs"
   ],
   "host_permissions": [
     "https://*.fetc.net.tw/*",

@@ -21,12 +21,23 @@ function makeArea(init) {
   };
 }
 
+// 假事件(chrome.*.onXxx):addListener 收下,fire(...args) 由測試觸發,回各 listener 的回傳值
+function makeEvent() {
+  const listeners = [];
+  return {
+    listeners,
+    addListener(fn) { listeners.push(fn); },
+    fire(...args) { return listeners.map((fn) => fn(...args)); },
+  };
+}
+
 // opts: { agent, cookies(陣列或函式), windows(已有視窗數), probe((tab,tabId)=>page state), runJob(job)=>pageRunner 回傳, tabStatus,
-//         onNavigate(tabId,url,state)(tabs.update 導航時), onSubmitForm(action,state,tabId)(過驗證 POST 表單送出時) }
-// state.downloads:假的下載清單({id,url,finalUrl,startTime,state});calls.downloads 記 cancel/removeFile/erase
+//         onNavigate(tabId,url,state)(tabs.update 導航時) }
+// state.downloads:假的下載清單({id,url,finalUrl,startTime,state});calls.downloads 記 cancel/removeFile/erase/open(擴充功能永遠不該呼叫)
+// downloads.onChanged／runtime.onInstalled／onStartup／onMessage:假事件,測試用 .fire() 觸發
 function makeFakeChrome(opts) {
   const o = opts || {};
-  const calls = { tabsCreated: [], tabsRemoved: [], windowsCreated: [], windowsRemoved: [], injected: [], tabsUpdated: [], scriptWire: [], formSubmits: [], downloads: [] };
+  const calls = { tabsCreated: [], tabsRemoved: [], windowsCreated: [], windowsRemoved: [], injected: [], tabsUpdated: [], scriptWire: [], downloads: [] };
   const state = { nextId: 100, tabs: new Map(), downloads: [], probe: o.probe || (() => ({ url: 'https://www.fetc.net.tw/Member', title: '會員專區', text: 'ok', hasLoginForm: false })) };
   const local = makeArea(o.agent ? { agent: o.agent } : {});
   const session = makeArea();
@@ -70,10 +81,23 @@ function makeFakeChrome(opts) {
       },
     },
     downloads: {
-      async search() { return state.downloads.map((d) => ({ ...d })); },
+      async search(q) {
+        const list = q && q.id !== undefined ? state.downloads.filter((d) => d.id === q.id) : state.downloads;
+        return list.map((d) => ({ ...d }));
+      },
       async cancel(id) { calls.downloads.push(['cancel', id]); },
       async removeFile(id) { calls.downloads.push(['removeFile', id]); },
       async erase(q) { calls.downloads.push(['erase', q.id]); state.downloads = state.downloads.filter((d) => d.id !== q.id); },
+      async open(id) { calls.downloads.push(['open', id]); },
+      onChanged: makeEvent(),
+    },
+    runtime: {
+      id: 'gfl-ext-synthetic',
+      getManifest: () => ({ version: '2.1.0', host_permissions: HOSTS }),
+      getPlatformInfo: (cb) => cb && cb({}),
+      onInstalled: makeEvent(),
+      onStartup: makeEvent(),
+      onMessage: makeEvent(),
     },
     scripting: {
       async executeScript(inj) {
@@ -84,11 +108,6 @@ function makeFakeChrome(opts) {
           return [];
         }
         if (inj.func === core.gflProbePage) return [{ result: await state.probe(state.tabs.get(inj.target.tabId), inj.target.tabId) }];
-        if (inj.func === core.gflSubmitPdfForm) {
-          calls.formSubmits.push({ tabId: inj.target.tabId, world: inj.world, action: inj.args[0] });
-          if (o.onSubmitForm) o.onSubmitForm(inj.args[0], state, inj.target.tabId);
-          return [{ result: { ok: true } }];
-        }
         if (inj.func === core.gflPageRunner) {
           const job = inj.args[0];
           calls.injected.push({ job: job.id, world: inj.world, tabId: inj.target.tabId });
@@ -137,4 +156,4 @@ function build(opts, handlers, extra) {
   return { core: c, ...fake, site, sleeps, timerFires, clock: () => clock };
 }
 
-module.exports = { makeFakeChrome, makeFakeSite, build, AGENT, HOSTS };
+module.exports = { makeFakeChrome, makeFakeSite, makeEvent, build, AGENT, HOSTS };
