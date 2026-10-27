@@ -220,3 +220,40 @@ test('原始碼守門: 兩檔無 require(/import/export/chrome.*', () => {
     assert.ok(!/\bchrome\./.test(src), `${f} 不得碰 chrome.*`);
   }
 });
+
+// ── b4 補強:GetPDF 回挑戰頁／登入頁要分辨出來並停打剩下車牌 ─────────────────
+const TWO = { ...WINDOW, plates: [
+  { plateRaw: 'TEST-001', times: ['2026/07/20 12:30:45'] },
+  { plateRaw: 'TEST-002', times: ['2026/07/20 12:30:45'] },
+] };
+
+test('GetPDF 回 CF 挑戰頁(403＋Just a moment)→ cf-challenge,剩下車牌不再打 GetPDF', async () => {
+  const { chain, log } = mk({ pdf: { status: 403, body: H.CF_HTML, headers: { 'content-type': 'text/html' } } });
+  const r = await chain.runPrintJob(TWO);
+  assert.deepStrictEqual(r.pdfs, [
+    { plateRaw: 'TEST-001', ok: false, reason: 'cf-challenge' },
+    { plateRaw: 'TEST-002', ok: false, reason: 'cf-challenge' },
+  ]);
+  assert.equal(paths(log).filter((p) => /GetPDF/.test(p)).length, 1);
+});
+
+test('GetPDF 回 503＋cf-mitigated: challenge(body 不含關鍵字)→ cf-challenge', async () => {
+  const { chain } = mk({ pdf: { status: 503, body: 'x', headers: { 'cf-mitigated': 'challenge' } } });
+  const r = await chain.runPrintJob({ ...WINDOW, plates: [TWO.plates[0]] });
+  assert.equal(r.pdfs[0].reason, 'cf-challenge');
+});
+
+test('GetPDF 被導回登入頁 → login-required,剩下車牌不再打 GetPDF', async () => {
+  const { chain, log } = mk({ pdf: { body: H.LOGIN_HTML, url: 'https://www.fetc.net.tw/UX0301UserLogin?ReturnUrl=%2F', headers: { 'content-type': 'text/html' } } });
+  const r = await chain.runPrintJob(TWO);
+  assert.deepStrictEqual(r.pdfs.map((p) => p.reason), ['login-required', 'login-required']);
+  assert.equal(paths(log).filter((p) => /GetPDF/.test(p)).length, 1);
+});
+
+test('GetPDF 回一般錯誤頁(非挑戰、非登入)仍是 pdf-failed 且不停打', async () => {
+  let n = 0;
+  const { chain } = mk({ pdf: () => (++n === 1 ? { status: 500, body: '<html>boom</html>', headers: { 'content-type': 'text/html' } } : undefined) });
+  const r = await chain.runPrintJob(TWO);
+  assert.equal(r.pdfs[0].reason, 'pdf-failed');
+  assert.equal(r.pdfs[1].ok, true);
+});

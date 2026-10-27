@@ -286,7 +286,23 @@
       }
       const head = new TextDecoder().decode(buf.subarray(0, 5));
       if (!resp.ok || head !== '%PDF-') {
+        // 先分辨「被擋」與「單純產 PDF 失敗」:CF 挑戰／登入頁會讓剩下的車牌停打(STOP_REASONS)。
         const ct = (resp.headers && resp.headers.get('content-type')) || '';
+        const mitigated = ((resp.headers && resp.headers.get && resp.headers.get('cf-mitigated')) || '').toLowerCase();
+        let text = '';
+        if (head !== '%PDF-') {
+          try {
+            text = new TextDecoder().decode(buf.subarray(0, 262144));
+          } catch (e) {
+            text = '';
+          }
+        }
+        if (P.isCfChallengeBody(resp.status, text) || ((resp.status === 403 || resp.status === 503) && mitigated === 'challenge')) {
+          throw makeErr('CF_CHALLENGE', 'cf-challenge:GetPDF 回 Cloudflare 挑戰頁(status=' + resp.status + ')');
+        }
+        if (head !== '%PDF-' && P.looksLikeLoginRedirect(resp.url, text)) {
+          throw makeErr('LOGIN_REQUIRED', 'login-required');
+        }
         throw makeErr('PDF_FAILED', `GetPDF 回應非 PDF(status=${resp.status}, type=${ct}, size=${buf.length})`);
       }
       return buf;

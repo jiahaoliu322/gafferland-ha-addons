@@ -16,6 +16,91 @@ const optionsLink = document.getElementById("optionsLink");
 
 let mode = null; // 'login' | 'update'
 
+// ── 2.0.0 新增:這台電腦(瀏覽器版 eTag 代查)狀態與「立即執行」──
+const agentVal = document.getElementById("agentVal");
+const fetcVal = document.getElementById("fetcVal");
+const lastRunVal = document.getElementById("lastRunVal");
+const cfHint = document.getElementById("cfHint");
+const runBtn = document.getElementById("runBtn");
+const runNote = document.getElementById("runNote");
+const openSettingsBtn = document.getElementById("openSettingsBtn");
+const openFetcBtn = document.getElementById("openFetcBtn");
+
+function setVal(el, text, cls) {
+  el.textContent = text;
+  el.className = cls ? `v ${cls}` : "v";
+}
+
+async function initAgent() {
+  openSettingsBtn.onclick = () => chrome.runtime.openOptionsPage();
+  openFetcBtn.onclick = () => chrome.tabs.create({ url: "https://www.fetc.net.tw/Member" });
+  runBtn.onclick = onRunNow;
+  await renderAgent();
+}
+
+async function renderAgent() {
+  const stored = await chrome.storage.local.get(["agent", "lastRun", "fetcState"]);
+  const agent = stored.agent && stored.agent.token ? stored.agent : null;
+  let loggedIn = false;
+  try {
+    const cookies = await chrome.cookies.getAll({ domain: FETC_COOKIE_DOMAIN });
+    loggedIn = cookies.some((c) => c.name === FETC_LOGIN_COOKIE);
+  } catch (err) {
+    loggedIn = false;
+  }
+
+  if (agent) {
+    setVal(agentVal, `已配對:${agent.name || agent.agentId}`, "ok");
+    openSettingsBtn.style.display = "none";
+  } else {
+    setVal(agentVal, "未配對", "no");
+    openSettingsBtn.style.display = "block";
+  }
+
+  if (loggedIn) {
+    setVal(fetcVal, "已登入", "ok");
+    openFetcBtn.style.display = "none";
+  } else {
+    setVal(fetcVal, "未登入", "no");
+    openFetcBtn.style.display = "block";
+  }
+
+  const lr = stored.lastRun;
+  if (lr) {
+    const t = new Date(lr.at).toLocaleString("zh-TW", { hour12: false });
+    setVal(lastRunVal, `${t} ${GflAgentCore.lastRunText(lr)}`, lr.ok === false ? "bad" : "");
+  } else {
+    setVal(lastRunVal, "尚未執行過", "");
+  }
+
+  const cf = (stored.fetcState && stored.fetcState.state) === "cf-interactive";
+  cfHint.style.display = cf ? "block" : "none";
+
+  if (!agent) {
+    runBtn.disabled = true;
+    runNote.textContent = "請先到設定頁輸入配對碼。";
+  } else if (!loggedIn) {
+    runBtn.disabled = true;
+    runNote.textContent = "遠通尚未登入,請先登入遠通會員區。";
+  } else {
+    runBtn.disabled = false;
+    runNote.textContent = "平常每 5 分鐘自動檢查一次,不必手動執行。";
+  }
+}
+
+async function onRunNow() {
+  runBtn.disabled = true;
+  runBtn.textContent = "執行中…";
+  try {
+    await chrome.runtime.sendMessage({ type: "gfl-run-now" });
+  } catch (err) {
+    /* 背景頁回應被中斷不影響執行 */
+  }
+  runBtn.textContent = "立即執行";
+  await renderAgent();
+}
+
+initAgent();
 init();
 
 async function init() {

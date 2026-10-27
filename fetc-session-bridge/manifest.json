@@ -1,13 +1,23 @@
 {
   "manifest_version": 3,
   "name": "Gafferland eTag Session",
-  "version": "1.1.0",
-  "description": "一鍵把遠通電收會員區的 cookies 送到 Gafferland 站台,更新 eTag session 並觸發補跑結算。",
-  "permissions": ["cookies", "storage", "clipboardWrite"],
+  "version": "2.0.0",
+  "description": "遠通電收會員區的 eTag 通行明細與收款憑證,由這台電腦的 Chrome 代為查詢並交回 Gafferland 站台(另保留舊中繼 session 更新備援)。",
+  "permissions": [
+    "alarms",
+    "cookies",
+    "scripting",
+    "storage",
+    "tabs",
+    "clipboardWrite"
+  ],
   "host_permissions": [
     "https://*.fetc.net.tw/*",
     "https://admin.gafferland.com/*"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_popup": "popup.html"
   },

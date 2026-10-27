@@ -89,6 +89,62 @@
     display: inline-block;
     margin-top: 4px;
   }
+  .row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 5px 0;
+    border-bottom: 1px solid #23262b;
+    line-height: 1.5;
+  }
+  .row .k { color: #9aa0a6; flex: none; }
+  .row .v { text-align: right; word-break: break-all; }
+  .row .v.ok { color: #4ade80; }
+  .row .v.no { color: #f5c451; }
+  .row .v.bad { color: #f87171; }
+  #cfHint {
+    display: none;
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: rgba(245, 196, 81, 0.12);
+    border: 1px solid rgba(245, 196, 81, 0.4);
+    color: #f5c451;
+    line-height: 1.5;
+  }
+  #runBtn {
+    background: #3b82f6;
+    color: #fff;
+  }
+  #runBtn:disabled {
+    background: #2a3d5c;
+    color: #9aa0a6;
+    cursor: not-allowed;
+  }
+  #runBtn:hover:not(:disabled) {
+    background: #2f6fe0;
+  }
+  #runNote {
+    color: #9aa0a6;
+    font-size: 11px;
+    line-height: 1.5;
+    margin: 6px 0 0;
+  }
+  #openFetcBtn, #openSettingsBtn {
+    background: #2a2d33;
+    color: #e6e6e6;
+    border: 1px solid #3a3d45;
+  }
+  details.legacy {
+    margin-top: 14px;
+    border-top: 1px solid #2a2d33;
+    padding-top: 8px;
+  }
+  details.legacy summary {
+    cursor: pointer;
+    color: #9aa0a6;
+    font-size: 12px;
+  }
   .footer {
     margin-top: 12px;
     text-align: right;
@@ -107,17 +163,34 @@
 <body>
   <h1>Gafferland eTag Session</h1>
 
-  <div id="status">檢查遠通登入狀態中…</div>
-  <p class="hint" id="hint" style="display:none;"></p>
+  <div id="agentRows">
+    <div class="row"><span class="k">這台電腦</span><span class="v" id="agentVal">讀取中…</span></div>
+    <div class="row"><span class="k">遠通</span><span class="v" id="fetcVal">讀取中…</span></div>
+    <div class="row"><span class="k">上次執行</span><span class="v" id="lastRunVal">讀取中…</span></div>
+  </div>
+  <div id="cfHint">請到遠通分頁點一下驗證</div>
 
-  <button id="primaryBtn" style="display:none;"></button>
+  <button id="runBtn" disabled>立即執行</button>
+  <p id="runNote"></p>
+  <button id="openSettingsBtn" style="display:none;">開啟設定</button>
+  <button id="openFetcBtn" style="display:none;">開啟遠通會員區</button>
 
-  <div id="message"></div>
+  <details class="legacy">
+    <summary>舊中繼(備援)</summary>
 
-  <button id="copyBtn">複製 Cookie 字串</button>
+    <div id="status">檢查遠通登入狀態中…</div>
+    <p class="hint" id="hint" style="display:none;"></p>
+
+    <button id="primaryBtn" style="display:none;"></button>
+
+    <div id="message"></div>
+
+    <button id="copyBtn">複製 Cookie 字串</button>
+  </details>
 
   <div class="footer"><a href="#" id="optionsLink">設定</a></div>
 
+  <script src="agent-core.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>
