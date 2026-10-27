@@ -1,0 +1,12 @@
+{
+  "name": "fetc-session-bridge",
+  "version": "0.0.0",
+  "private": true,
+  "description": "eTag 瀏覽器擴充功能的純函式測試(僅開發用;擴充功能執行期不依賴任何套件)",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "linkedom": "^0.18.14"
+  }
+}
