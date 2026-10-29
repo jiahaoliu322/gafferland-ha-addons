@@ -1,7 +1,7 @@
-// ── 擴充功能 2.1.0 執行面核心(可注入依賴,不直接碰全域 chrome)────────────────────
+// ── 擴充功能 2.2.0 執行面核心(可注入依賴,不直接碰全域 chrome)────────────────────
 // background.js 只負責把真的 chrome.* 接進來;這裡的邏輯用假 chrome／假 fetch 在 node 測試。
 //
-// 平常不連遠通、不問站台;只有員工按 popup「執行」(或憑證待補時偵測到員工在遠通下載了憑證)才跑一次 run:
+// 平常不連遠通、不問站台;只有員工按 popup「執行」才跑一次 run(只做查詢與金額;收款憑證由員工到網站匯入遠通 PDF):
 //   未配對 → 結束;遠通 cookie(FETC_P)判斷登入(未登入＝只心跳、不開分頁)→ POST etag-agent-poll →
 //   有工作才開遠通分頁 →(驗證頁／登入頁判斷)→ 逐工作把 fetc-parse.js＋fetc-chain.js 注入該分頁(MAIN world)執行 →
 //   POST etag-agent-result(回應的 next 接著做)→ 佇列空了再問一次站台,直到站台回空 → 關自己開的分頁。
@@ -34,8 +34,9 @@
   const POLL_MAX_JOBS = 10;
   const SESSION_REASONS = ['login-required', 'cf-interactive', 'cf-challenge'];
   const PAGE_FILES = ['fetc-parse.js', 'fetc-chain.js'];
-  const PRINT_TYPES = ['settle-print', 'attach-print'];
   const QUERY_TYPES = ['settle-query', 'scan'];
+  // popup「憑證 M 份」只算數字用;擴充功能不做憑證(2.2.0 起站台也不發給電腦,待補憑證由網站匯入)
+  const RECEIPT_TYPES = ['settle-print', 'attach-print'];
   const TRIGGERS = ['popup', 'download'];
   // 頁面回傳可信度:reason 只收 10-common 列的值;cinCache 限 key/value 長度與筆數
   const ALLOWED_REASONS = ['login-required', 'cf-interactive', 'cf-challenge', 'no-rows', 'cin-not-found', 'pdf-failed', 'error'];
@@ -48,8 +49,6 @@
   const MSG_NOT_LOGGED_IN = '遠通尚未登入,請先登入遠通會員區再按「執行」';
   const MSG_RELOGIN = '遠通需要重新登入,請登入遠通會員區後再按「執行」';
   const MSG_CF_TAB = '遠通分頁出現驗證,請在那個分頁完成後再按一次「執行」';
-  const msgPdfBlocked = (done, n) =>
-    `完成 ${done} 筆;憑證待補 ${n} 份:請在遠通任一筆按一次「列印」,下載完成後會自動補跑(或再按「執行」)`;
 
   // ── 純函式 ──────────────────────────────────────────────────────────────────
 
@@ -170,7 +169,7 @@
     return { json, dropped };
   }
 
-  // 站台 queue 統計(poll 回應)→ {query, print}:查詢＝settle-query＋scan、憑證＝settle-print＋attach-print。
+  // 站台 queue 統計(poll 回應)→ {query, print}:查詢＝settle-query＋scan、憑證(待補,網站匯入)＝settle-print＋attach-print。
   // 沒有 byType(舊站台)或值不是非負數一律當 0
   function queueCounts(queue) {
     const bt = queue && typeof queue === 'object' && queue.byType && typeof queue.byType === 'object' ? queue.byType : {};
@@ -179,7 +178,7 @@
       return Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
     };
     const sum = (ks) => ks.reduce((n, k) => n + num(k), 0);
-    return { query: sum(QUERY_TYPES), print: sum(PRINT_TYPES) };
+    return { query: sum(QUERY_TYPES), print: sum(RECEIPT_TYPES) };
   }
 
   // 工作結果(上傳用的 {ok,reason?,data?})是否帶登入／驗證類原因。回 'login-required' | 'cf-interactive' | null
@@ -301,9 +300,9 @@
       return { status: resp.status, data };
     }
 
-    // 解除配對／被移除:連同這台的待補旗標、peek 統計、CIN 快取一起清(b78f F-3)
+    // 解除配對／被移除:連同這台的 peek 統計、CIN 快取、最後錯誤、待回報錯誤一起清(b78f F-3;b10 加 lastError／pendingError)
     async function clearPairing() {
-      await local.remove(['agent', 'pdfPending', 'lastPeek', 'cinCache']);
+      await local.remove(['agent', 'lastPeek', 'cinCache', 'lastError', 'pendingError']);
     }
 
     async function recordRun(info) {
@@ -498,11 +497,10 @@
       return cookies.some((c) => c.name === FETC_LOGIN_COOKIE);
     }
 
-    // exclude:要站台這次不發的工作型別(b78f F-1:憑證被擋後帶兩種 print)
-    async function pollSite(agent, fetcState, max, exclude) {
+    async function pollSite(agent, fetcState, max) {
       const lastError = await getLocal('pendingError');
-      const body = { version, fetcState, max };
-      if (Array.isArray(exclude) && exclude.length) body.exclude = exclude.slice();
+      // 一律排除憑證類(舊站台認 exclude、新站台伺服器本來就排除,不依賴上線順序;非恢復 pdfBlocked)
+      const body = { version, fetcState, max, exclude: RECEIPT_TYPES.slice() };
       if (lastError) body.lastError = String(lastError).slice(0, 200);
       const r = await callSite(agent, 'etag-agent-poll', body);
       if (r.status === 401) return { revoked: true, status: 401 };
@@ -543,9 +541,9 @@
 
       const first = await firstPoll(agent, 'ok', POLL_MAX_JOBS);
       if (first.exit) return first.exit;
-      let lastQueue = first.data.queue;
+      const firstQueue = first.data.queue;
       // 站台有回 queue 統計(b7 起一律有)才「佇列空了再問一次」;舊站台只做這一批
-      const canRepoll = !!(lastQueue && typeof lastQueue === 'object');
+      const canRepoll = !!(firstQueue && typeof firstQueue === 'object');
 
       const queue = [];
       const known = new Set(); // 本輪已收下(已做或已回報)的工作 id
@@ -562,12 +560,7 @@
       }
       admit(first.data.jobs);
 
-      const finish = async (pdfBlocked) => {
-        await local.set({ pdfPending: !!pdfBlocked || queueCounts(lastQueue).print > 0 });
-      };
-
       if (!queue.length) {
-        await finish(false);
         return recordRun({ state: 'ok', message: '沒有待處理工作' });
       }
 
@@ -578,8 +571,6 @@
       let done = 0;
       let lastErr = null;
       let leaveTab = false;
-      let pdfBlocked = false; // 憑證被 CF 擋:本輪其餘憑證工作不做,查詢照做
-      const blocked = new Set();
       let processed = 0;
       let polls = 1;
       try {
@@ -595,10 +586,8 @@
           while (queue.length && processed < MAX_JOBS_PER_RUN) {
             const job = queue.shift();
             processed++;
-            const isPrint = PRINT_TYPES.includes(job.type);
-            if (stop || (isPrint && pdfBlocked)) {
-              const body = { id: job.id, ok: false, reason: stop || 'cf-challenge' };
-              if (!stop) blocked.add(job.id);
+            if (stop) {
+              const body = { id: job.id, ok: false, reason: stop };
               const rr = await postResult(agent, body);
               if (rr.revoked) return revokedExit();
               continue;
@@ -611,15 +600,11 @@
             if (ex.message && isRealError(ex)) lastErr = ex.message; // 偏離 6 降噪:cin-not-found／no-rows 這類正常業務結果不算錯誤
             const body = ex.out.ok ? { id: job.id, ok: true, data: ex.out.data } : { id: job.id, ok: false, reason: ex.out.reason };
             let s = sessionStopOf(ex.out);
-            if (isPrint && s === 'cf-interactive') {
-              // 憑證被擋只擋憑證:照回報(站台釋放並退還次數),本輪之後的憑證工作不做
-              pdfBlocked = true;
-              blocked.add(job.id);
-              s = null;
-            }
+            // 查詢類以外(舊站台才會發的憑證工作)被 CF 擋＝一般錯誤:該筆照回報、整輪不停
+            if (s === 'cf-interactive' && !QUERY_TYPES.includes(job.type)) s = null;
             const rr = await postResult(agent, body);
             if (rr.revoked) return revokedExit();
-            if (!rr.failed && !blocked.has(job.id)) done++;
+            if (!rr.failed) done++;
             if (s) {
               stop = s;
               leaveTab = s === 'cf-interactive';
@@ -630,8 +615,7 @@
           if (stop || queue.length || processed >= MAX_JOBS_PER_RUN || !canRepoll || polls >= MAX_POLLS_PER_RUN) break;
           let p;
           try {
-            // 憑證已被擋:之後的 poll 請站台別再發憑證工作,名額留給查詢(b78f F-1)
-            p = await pollSite(agent, 'ok', Math.min(POLL_MAX_JOBS, MAX_JOBS_PER_RUN - processed), pdfBlocked ? PRINT_TYPES : undefined);
+            p = await pollSite(agent, 'ok', Math.min(POLL_MAX_JOBS, MAX_JOBS_PER_RUN - processed));
           } catch (e) {
             await local.set({ pendingError: 'poll-network' });
             break;
@@ -642,7 +626,6 @@
             await local.set({ pendingError: `poll-http-${p.status}` });
             break;
           }
-          lastQueue = p.data.queue;
           const fresh = admit(p.data.jobs);
           if (!fresh) break; // 站台回空(或只剩本輪已處理過的)
         }
@@ -650,18 +633,12 @@
         if (!leaveTab) await closeOwned(own);
       }
 
-      await finish(pdfBlocked);
       if (lastErr) {
         const msg = sanitizeMessage(String(lastErr)) || 'error';
         await local.set({ pendingError: msg, lastError: { at: now(), message: msg } });
       }
       if (stop === 'login-required') return recordRun({ count: done, state: 'login-required', message: MSG_RELOGIN });
       if (stop === 'cf-interactive') return recordRun({ count: done, state: 'cf-interactive', message: MSG_CF_TAB });
-      if (pdfBlocked) {
-        // 待補數＝最後一次 poll 回應的站台憑證數;回應沒有 queue(舊站台)才退回本輪被擋數(b78f F-1)
-        const n = lastQueue && typeof lastQueue === 'object' ? queueCounts(lastQueue).print : blocked.size;
-        return recordRun({ count: done, state: 'cf-interactive', message: msgPdfBlocked(done, n) });
-      }
       return recordRun({ count: done, state: 'ok', message: `完成 ${done} 筆工作` });
     }
 
@@ -671,7 +648,7 @@
     }
 
     // 對外:run。同時只跑一個(記憶體旗標擋同一個 SW 內的並行;storage.session 鎖擋 SW 重啟後的殘留,5 分鐘過期)
-    // opts.trigger:'popup'(按「執行」)｜'download'(員工在遠通下載了憑證)｜undefined,記進 lastRun.trigger
+    // opts.trigger:'popup'(按「執行」)｜'download'(2.1.x 下載觸發的舊值,2.2.0 已無呼叫端)｜undefined,記進 lastRun.trigger
     async function run(opts) {
       if (running) return { skipped: 'busy' };
       running = true;
@@ -777,11 +754,9 @@
     POLL_MAX_JOBS,
     RESULT_LIMIT_BYTES,
     PAGE_FILES,
-    PRINT_TYPES,
     ALLOWED_REASONS,
     MSG_NOT_LOGGED_IN,
     MSG_CF_TAB,
-    msgPdfBlocked,
     resolveBaseUrl,
     isHostPermitted,
     isFetcUrl,

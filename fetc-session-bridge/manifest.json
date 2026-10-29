@@ -1,12 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Gafferland eTag Session",
-  "version": "2.1.0",
-  "description": "遠通電收會員區的 eTag 通行明細與收款憑證,由員工按「執行」時在這台電腦已登入的遠通分頁內代為查詢並產生收款憑證，交回 Gafferland 站台（平常不自動連線）。",
+  "version": "2.2.0",
+  "description": "遠通電收會員區的 eTag 通行明細與收款憑證,由員工按「執行」時在這台電腦已登入的遠通分頁內代為查詢通行明細，交回 Gafferland 站台計算金額（平常不自動連線；收款憑證請在網站匯入遠通 PDF）。",
   "permissions": [
     "clipboardWrite",
     "cookies",
-    "downloads",
     "scripting",
     "storage",
     "tabs"

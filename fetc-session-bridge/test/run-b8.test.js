@@ -1,5 +1,6 @@
 'use strict';
-// b8:2.1.0「你要才執行」——一鍵跑完佇列、憑證被擋只擋憑證、peek、未登入、驗證頁、trigger。
+// b8:2.1.0「你要才執行」——一鍵跑完佇列、peek、未登入、驗證頁、trigger。
+// b10(2.2.0):憑證被擋相關案(②／②b／②c／F-1 系列／下載觸發案)刪除,改成「舊站台仍發 print 類＝一般錯誤回報、不設 pdfPending」一案。
 // 假 chrome＋假站台;全部合成資料(零真實車牌／帳號)。
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -84,7 +85,7 @@ test('①一鍵跑完:站台 poll 連回 3＋2＋0 筆 → 三次 poll、5 筆�
   assert.equal(r.state, 'ok');
   assert.equal(r.message, '完成 5 筆工作');
   assert.equal(r.trigger, 'popup');
-  assert.equal(t.local.m.get('pdfPending'), false);
+  assert.equal(t.local.m.has('pdfPending'), false, 'b10:不再寫 pdfPending');
   assertOnlyMemberNav(t);
 });
 
@@ -125,118 +126,32 @@ test('①d 舊站台(poll 回應沒有 queue 統計):只做第一批,不再 poll
   assert.deepEqual(ran(t), ['a']);
 });
 
-test('②憑證被擋:sp 回 cf-challenge → 照回報、後面的 ap 不執行直接回報 cf-challenge、同輪 sq 照做、pdfPending=true', async () => {
-  const site = queueSite([sp('sp:1'), ap('ap:1'), sq('sq:1')]);
-  const t = build(
-    { agent: AGENT, runJob: async (j) => (j.type === 'settle-print' ? cfPage() : j.type === 'attach-print' ? okPrint : okQuery) },
-    { poll: site.poll, result: site.result }
-  );
-  const r = await t.core.run();
-  assert.deepEqual(ran(t), ['sp:1', 'sq:1'], '只有 sp 與 sq 在分頁內執行');
-  const rs = results(t);
-  assert.deepEqual(rs.slice(0, 3), [
-    { id: 'sp:1', ok: false, reason: 'cf-challenge' },
-    { id: 'ap:1', ok: false, reason: 'cf-challenge' },
-    { id: 'sq:1', ok: true, data: okQuery.data },
-  ]);
-  // b78f:被擋後的 poll 帶 exclude,站台不再發憑證 → 不會有重報
-  assert.equal(rs.length, 3);
-  assert.equal(polls(t).length, 2);
-  assert.equal('exclude' in polls(t)[0].body, false, '被擋之前的 poll 不帶 exclude');
-  assert.deepEqual(polls(t)[1].body.exclude, ['settle-print', 'attach-print']);
-  assert.deepEqual([...site.open.keys()].sort(), ['ap:1', 'sp:1'], '兩筆憑證仍在站台佇列(未被 claim 卡住)');
-  assert.equal(t.local.m.get('pdfPending'), true);
-  assert.equal(r.state, 'cf-interactive');
-  assert.equal(r.message, '完成 1 筆;憑證待補 2 份:請在遠通任一筆按一次「列印」,下載完成後會自動補跑(或再按「執行」)');
-  assert.equal(t.calls.tabsRemoved.length, 1, '分頁照關');
-  assert.equal(t.local.m.has('cfTab'), false);
-  assertOnlyMemberNav(t);
-});
-
-test('②b 憑證被擋寫在 per-plate(ok:true 的 pdfs 帶 cf-challenge)也只擋憑證;查詢 cf-challenge 才整輪停', async () => {
+test('b10:舊站台若仍發 print 類工作(attach-print／settle-print)＝一般錯誤回報、整輪不停、不設 pdfPending、poll 一律帶 exclude', async () => {
+  const site = queueSite([ap('ap:1'), sp('sp:1'), sq('sq:1')]);
   const t = build(
     {
       agent: AGENT,
       runJob: async (j) =>
-        j.type === 'attach-print' ? { ok: true, data: { pdfs: [{ plateRaw: 'TEST-001', ok: false, reason: 'cf-challenge' }] } } : j.id === 'q2' ? cfPage() : okQuery,
+        j.type === 'attach-print' ? cfPage() : j.type === 'settle-print' ? { ok: true, data: { pdfs: [{ plateRaw: 'TEST-001', ok: false, reason: 'cf-challenge' }] } } : okQuery,
     },
-    { poll: seqPoll([[ap('a'), sq('q1'), sp('s'), sq('q2'), sq('q3')]]), result: resultOk }
+    // 模擬「不認 exclude 的站台」(b10f:擴充功能 poll 一律帶 exclude,正常站台不會再發 print 類)
+    { poll: (body) => site.poll({ ...body, exclude: undefined }), result: site.result }
   );
   const r = await t.core.run();
-  assert.deepEqual(ran(t), ['a', 'q1', 'q2']);
-  assert.deepEqual(results(t).slice(1), [
-    { id: 'q1', ok: true, data: okQuery.data },
-    { id: 's', ok: false, reason: 'cf-challenge' },
-    { id: 'q2', ok: false, reason: 'cf-challenge' },
-    { id: 'q3', ok: false, reason: 'cf-interactive' },
+  assert.deepEqual(ran(t), ['ap:1', 'sp:1', 'sq:1'], '三筆都照常執行(不因憑證被擋跳過)');
+  assert.deepEqual(results(t), [
+    { id: 'ap:1', ok: false, reason: 'cf-challenge' },
+    { id: 'sp:1', ok: true, data: { pdfs: [{ plateRaw: 'TEST-001', ok: false, reason: 'cf-challenge' }] } },
+    { id: 'sq:1', ok: true, data: okQuery.data },
   ]);
-  assert.equal(polls(t).length, 1, '整輪停就不再 poll');
-  assert.equal(r.state, 'cf-interactive');
-  assert.equal(t.local.m.get('pdfPending'), true);
-  assert.equal(t.local.m.has('cfTab'), false);
-});
-
-test('②c 沒被擋但站台還有憑證(最後一次 poll 的 byType)→ pdfPending=true;都沒有 → false', async () => {
-  const t = build({ agent: AGENT, runJob: async () => okQuery }, { poll: seqPoll([[sq('a')], []], (i) => qOf(i === 1 ? { 'attach-print': 2 } : {})), result: resultOk });
-  const r = await t.core.run();
+  assert.ok(polls(t).every((l) => Array.isArray(l.body.exclude) && l.body.exclude.join() === 'settle-print,attach-print'), 'poll 一律帶 exclude');
   assert.equal(r.state, 'ok');
-  assert.equal(t.local.m.get('pdfPending'), true);
-  const t2 = build({ agent: AGENT }, { poll: seqPoll([[]], () => qOf({ 'settle-query': 3 })), result: resultOk });
-  await t2.local.set({ pdfPending: true });
-  const r2 = await t2.core.run();
-  assert.equal(r2.message, '沒有待處理工作');
-  assert.equal(t2.local.m.get('pdfPending'), false);
-  assert.equal(t2.calls.tabsCreated.length + t2.calls.windowsCreated.length, 0);
-});
-
-// ── b78f F-1:被擋後 poll 帶 exclude、待補數取自站台 queue ─────────────────────────
-
-test('b78f F-1:被擋之前的 poll 不帶 exclude;被擋之後每次 poll 都帶兩種 print', async () => {
-  const t = build(
-    { agent: AGENT, runJob: async (j) => (j.type === 'settle-print' ? cfPage() : okQuery) },
-    { poll: seqPoll([[sq('a')], [sp('s')], [sq('b')], []], () => qOf({ 'settle-print': 1 })), result: resultOk }
-  );
-  const r = await t.core.run();
-  assert.deepEqual(ran(t), ['a', 's', 'b']);
-  const bodies = polls(t).map((l) => l.body);
-  assert.equal(bodies.length, 4);
-  assert.equal('exclude' in bodies[0], false, '第 1 次(未被擋)');
-  assert.equal('exclude' in bodies[1], false, '第 2 次(未被擋)');
-  assert.deepEqual(bodies[2].exclude, ['settle-print', 'attach-print'], '第 3 次(被擋後)');
-  assert.deepEqual(bodies[3].exclude, ['settle-print', 'attach-print'], '第 4 次(被擋後)');
-  assert.equal(r.state, 'cf-interactive');
-});
-
-test('b78f F-1 重現:一批 10 筆全是憑證、第一筆被擋 → 再 poll 帶 exclude 領到後面的查詢並做完(不被憑證餓死)', async () => {
-  const prints = Array.from({ length: 12 }, (_, i) => sp(`sp:${i}`));
-  const site = queueSite([...prints, sq('sq:late')]);
-  const t = build({ agent: AGENT, runJob: async (j) => (j.type === 'settle-print' ? cfPage() : okQuery) }, { poll: site.poll, result: site.result });
-  const r = await t.core.run();
-  assert.deepEqual(ran(t), ['sp:0', 'sq:late'], '只有第一筆憑證真的跑;查詢有被領到並執行');
-  assert.equal(results(t).length, 11, '10 筆憑證各回報一次＋1 筆查詢,不重報');
-  assert.equal(site.open.has('sq:late'), false, '查詢已完成');
-  assert.equal(site.open.size, 12, '12 筆憑證都還在站台佇列');
-  assert.equal(r.message, '完成 1 筆;憑證待補 12 份:請在遠通任一筆按一次「列印」,下載完成後會自動補跑(或再按「執行」)');
-});
-
-test('b78f F-1:憑證待補數＝最後一次 poll 回應 queue.byType 的 settle-print＋attach-print(不是本輪被擋數)', async () => {
-  const t = build(
-    { agent: AGENT, runJob: async (j) => (j.type === 'settle-print' ? cfPage() : okQuery) },
-    { poll: seqPoll([[sp('s'), sq('q')], []], (i) => qOf(i === 0 ? { 'settle-print': 1, 'settle-query': 1 } : { 'settle-print': 4, 'attach-print': 3, 'settle-query': 9 })), result: resultOk }
-  );
-  const r = await t.core.run();
-  assert.equal(r.message, core.msgPdfBlocked(1, 7));
-  assert.equal(r.message, '完成 1 筆;憑證待補 7 份:請在遠通任一筆按一次「列印」,下載完成後會自動補跑(或再按「執行」)');
-});
-
-test('b78f F-1:poll 回應沒有 queue(舊站台)才退回本輪被擋數', async () => {
-  const t = build(
-    { agent: AGENT, runJob: async (j) => (j.type === 'settle-print' ? cfPage() : okQuery) },
-    { poll: () => ({ status: 200, json: { ok: true, mode: 'browser', jobs: [sp('s1'), ap('a1'), sq('q')], pollAfterSec: 300 } }), result: resultOk }
-  );
-  const r = await t.core.run();
-  assert.equal(polls(t).length, 1);
-  assert.equal(r.message, core.msgPdfBlocked(1, 2));
+  assert.equal(r.message, '完成 3 筆工作');
+  assert.equal(t.local.m.has('pdfPending'), false);
+  assert.equal(t.local.m.get('lastError').message, 'cf-challenge step=getpdf status=403', '一般錯誤路徑:記最後錯誤');
+  assert.equal(t.calls.tabsRemoved.length, 1, '分頁照關(不留給人處理)');
+  assert.equal(t.local.m.has('cfTab'), false);
+  assertOnlyMemberNav(t);
 });
 
 // ── b78f F-2:同一輪站台再發回已回報過的 id → 不執行、不重報、不算新工作 ───────────────
@@ -269,12 +184,12 @@ test('b78f F-2:站台在 next 裡發回已回報過的 id(含被擋憑證)→ �
 
 // ── b78f F-3:被移除時一併清殘留 ────────────────────────────────────────────────
 
-const RESIDUE = { pdfPending: true, lastPeek: { at: 1, queue: null }, cinCache: { 'TEST-001': 'CIN1' } };
+const RESIDUE = { lastPeek: { at: 1, queue: null }, cinCache: { 'TEST-001': 'CIN1' } };
 const assertNoResidue = (t, label) => {
-  for (const k of ['agent', 'pdfPending', 'lastPeek', 'cinCache']) assert.equal(t.local.m.has(k), false, `${label}:${k}`);
+  for (const k of ['agent', 'lastPeek', 'cinCache']) assert.equal(t.local.m.has(k), false, `${label}:${k}`);
 };
 
-test('b78f F-3:run 的 poll 回 401 → agent／pdfPending／lastPeek／cinCache 都不存在', async () => {
+test('b78f F-3:run 的 poll 回 401 → agent／lastPeek／cinCache 都不存在', async () => {
   const t = build({ agent: AGENT }, { poll: () => ({ status: 401, json: { ok: false } }), result: resultOk });
   await t.local.set(RESIDUE);
   const r = await t.core.run();
@@ -299,7 +214,7 @@ test('b78f F-3:peek 回 401 → 殘留鍵都清掉;clearPairing 本身也清', a
   await t2.local.set({ ...RESIDUE, lastRun: { at: 1 } });
   await t2.core.clearPairing();
   assertNoResidue(t2, 'clearPairing');
-  assert.ok(t2.local.m.has('lastRun'), 'clearPairing 只清這四鍵');
+  assert.ok(t2.local.m.has('lastRun'), 'clearPairing 不清 lastRun');
 });
 
 test('④peek:poll max:0(含心跳)、不開分頁、不執行、存 lastPeek', async () => {
@@ -384,17 +299,4 @@ test('trigger:run({trigger}) 記進 lastRun.trigger;不在清單內／未給＝�
     assert.equal(lastRun(t).trigger, want, String(given));
     assert.equal('trigger' in lastRun(t), want !== undefined, String(given));
   }
-});
-
-test('④c/⑧ 下載觸發的 run 也照 T1:executeScript 不帶 token;calls.downloads 永遠空', async () => {
-  const site = queueSite([sp('sp:1'), sq('sq:1')]);
-  const t = build({ agent: AGENT, runJob: async (j) => (j.type === 'settle-print' ? okPrint : okQuery) }, { poll: site.poll, result: site.result });
-  await t.local.set({ pdfPending: true });
-  const r = await t.core.run({ trigger: 'download' });
-  assert.equal(r.state, 'ok');
-  assert.equal(r.trigger, 'download');
-  assert.equal(t.local.m.get('pdfPending'), false);
-  assert.equal(site.open.size, 0);
-  for (const w of t.calls.scriptWire) assert.ok(!w.includes(AGENT.token));
-  assert.deepEqual(t.calls.downloads, []);
 });

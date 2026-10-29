@@ -16,14 +16,16 @@ const optionsLink = document.getElementById("optionsLink");
 
 let mode = null; // 'login' | 'update'
 
-// ── 這台電腦(瀏覽器版 eTag 代查)狀態與「執行」(2.1.0:平常不自動跑,員工按「執行」才跑)──
+// ── 這台電腦(瀏覽器版 eTag 代查)狀態與「執行」(平常不自動跑,員工按「執行」才跑;2.2.0 起只做查詢與金額,憑證到網站匯入)──
 const agentVal = document.getElementById("agentVal");
 const fetcVal = document.getElementById("fetcVal");
 const queueVal = document.getElementById("queueVal");
 const lastRunVal = document.getElementById("lastRunVal");
 const lastErrRow = document.getElementById("lastErrRow");
 const lastErrVal = document.getElementById("lastErrVal");
-const cfHint = document.getElementById("cfHint");
+const receiptHint = document.getElementById("receiptHint");
+const receiptHintText = document.getElementById("receiptHintText");
+const openReceiptsBtn = document.getElementById("openReceiptsBtn");
 const runBtn = document.getElementById("runBtn");
 const runNote = document.getElementById("runNote");
 const openSettingsBtn = document.getElementById("openSettingsBtn");
@@ -56,7 +58,7 @@ async function refreshPeek() {
 
 // peek＝null:還在讀;{failed:true}:讀取失敗;否則 {paired,loggedIn,queue,mode}
 async function renderAgent(peek) {
-  const stored = await chrome.storage.local.get(["agent", "lastRun", "fetcState", "lastError", "pdfPending"]);
+  const stored = await chrome.storage.local.get(["agent", "lastRun", "fetcState", "lastError"]);
   const agent = stored.agent && stored.agent.token ? stored.agent : null;
   let loggedIn = false;
   try {
@@ -113,9 +115,20 @@ async function renderAgent(peek) {
     setVal(queueVal, `查詢 ${counts.query} 筆・憑證 ${counts.print} 份`, "");
   }
 
-  // 憑證待補提示只在「已配對 且 pdfPending===true」時顯示(b78f F-3:解除配對後的殘留旗標不顯示)
-  const pdfPending = !!agent && stored.pdfPending === true;
-  cfHint.style.display = pdfPending ? "block" : "none";
+  // 憑證指引:已配對且站台憑證待補 M＞0 才顯示;「開啟匯入頁」開已配對站台的 /collect#etag-receipts
+  // (M 直接取 peek 統計;配對與否另外把關,不靠上面「站台待處理」列的分支)
+  const peekCounts = peek && !peek.failed && peek.queue ? GflAgentCore.queueCounts(peek.queue) : null;
+  const receiptsPending = agent && peekCounts ? peekCounts.print : 0;
+  if (receiptsPending > 0) {
+    receiptHintText.textContent = `憑證 ${receiptsPending} 份待補：到遠通下載該車的通行費紀錄 PDF，再到網站「eTag 待補憑證」匯入（擴充功能不會自動抓憑證）。`;
+    const receiptsUrl = `${GflAgentCore.resolveBaseUrl(agent.baseUrl)}/collect#etag-receipts`;
+    openReceiptsBtn.onclick = () => chrome.tabs.create({ url: receiptsUrl });
+    receiptHint.style.display = "block";
+  } else {
+    receiptHintText.textContent = "";
+    openReceiptsBtn.onclick = null;
+    receiptHint.style.display = "none";
+  }
 
   if (!agent) {
     runBtn.disabled = true;
@@ -125,12 +138,12 @@ async function renderAgent(peek) {
     runNote.textContent = "請先登入遠通會員區，再回來按「執行」。";
   } else {
     runBtn.disabled = false;
-    if (counts && counts.print > 0) {
-      runNote.textContent = "建議先在遠通任一筆按「列印」，再按「執行」，憑證會一次補完。";
+    if (counts && counts.query === 0 && counts.print > 0) {
+      runNote.textContent = "目前沒有要查詢的；憑證請到網站匯入。";
     } else if (counts && counts.query === 0) {
       runNote.textContent = "目前沒有待處理工作。";
     } else {
-      runNote.textContent = "按「執行」會在背景開遠通分頁處理，做完自動關閉。";
+      runNote.textContent = "按「執行」會在背景開遠通分頁查詢並計算金額，做完自動關閉。";
     }
   }
 }

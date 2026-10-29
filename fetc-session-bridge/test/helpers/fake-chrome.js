@@ -33,12 +33,12 @@ function makeEvent() {
 
 // opts: { agent, cookies(陣列或函式), windows(已有視窗數), probe((tab,tabId)=>page state), runJob(job)=>pageRunner 回傳, tabStatus,
 //         onNavigate(tabId,url,state)(tabs.update 導航時) }
-// state.downloads:假的下載清單({id,url,finalUrl,startTime,state});calls.downloads 記 cancel/removeFile/erase/open(擴充功能永遠不該呼叫)
-// downloads.onChanged／runtime.onInstalled／onStartup／onMessage:假事件,測試用 .fire() 觸發
+// runtime.onInstalled／onStartup／onMessage:假事件,測試用 .fire() 觸發
+// b10(2.2.0):擴充功能不再有 downloads 權限,假 chrome 也不提供 chrome.downloads(誤用＝直接丟錯)
 function makeFakeChrome(opts) {
   const o = opts || {};
-  const calls = { tabsCreated: [], tabsRemoved: [], windowsCreated: [], windowsRemoved: [], injected: [], tabsUpdated: [], scriptWire: [], downloads: [] };
-  const state = { nextId: 100, tabs: new Map(), downloads: [], probe: o.probe || (() => ({ url: 'https://www.fetc.net.tw/Member', title: '會員專區', text: 'ok', hasLoginForm: false })) };
+  const calls = { tabsCreated: [], tabsRemoved: [], windowsCreated: [], windowsRemoved: [], injected: [], tabsUpdated: [], scriptWire: [] };
+  const state = { nextId: 100, tabs: new Map(), probe: o.probe || (() => ({ url: 'https://www.fetc.net.tw/Member', title: '會員專區', text: 'ok', hasLoginForm: false })) };
   const local = makeArea(o.agent ? { agent: o.agent } : {});
   const session = makeArea();
   const chrome = {
@@ -80,20 +80,9 @@ function makeFakeChrome(opts) {
         return { id, tabs: [...state.tabs.values()].filter((t) => t.windowId === id).map((t) => ({ ...t })) };
       },
     },
-    downloads: {
-      async search(q) {
-        const list = q && q.id !== undefined ? state.downloads.filter((d) => d.id === q.id) : state.downloads;
-        return list.map((d) => ({ ...d }));
-      },
-      async cancel(id) { calls.downloads.push(['cancel', id]); },
-      async removeFile(id) { calls.downloads.push(['removeFile', id]); },
-      async erase(q) { calls.downloads.push(['erase', q.id]); state.downloads = state.downloads.filter((d) => d.id !== q.id); },
-      async open(id) { calls.downloads.push(['open', id]); },
-      onChanged: makeEvent(),
-    },
     runtime: {
       id: 'gfl-ext-synthetic',
-      getManifest: () => ({ version: '2.1.0', host_permissions: HOSTS }),
+      getManifest: () => ({ version: '2.2.0', host_permissions: HOSTS }),
       getPlatformInfo: (cb) => cb && cb({}),
       onInstalled: makeEvent(),
       onStartup: makeEvent(),

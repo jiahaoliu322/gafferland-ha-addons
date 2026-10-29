@@ -1,5 +1,5 @@
 // Gafferland eTag 瀏覽器版 — 背景 service worker(只接 chrome.*;邏輯在 agent-core.js)
-// 平常不連遠通、不問站台:只有 popup「執行」與「憑證待補時員工在遠通下載了憑證」會跑一輪。
+// 平常不連遠通、不問站台:只有 popup「執行」會跑一輪(只做查詢與金額;收款憑證由員工到網站匯入遠通 PDF)。
 // token 只存 chrome.storage.local,這裡不 log 任何憑證。
 importScripts('agent-core.js');
 
@@ -27,45 +27,14 @@ const core = GflAgentCore.createAgentCore({
   log: (...a) => console.log('[gfl-etag]', ...a),
 });
 
-// 一次性清理:2.0.x 留下的舊鍵(留給人點驗證的分頁、上次自動過驗證紀錄)
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.remove(['cfTab', 'lastClearance']);
+// 一次性清理舊鍵:2.0.x 的 cfTab(留給人點驗證的分頁)、lastClearance(上次自動過驗證紀錄);2.1.x 的 pdfPending(憑證待補旗標)
+chrome.runtime.onInstalled.addListener((details) => {
+  chrome.storage.local.remove(['cfTab', 'lastClearance', 'pdfPending']);
+  // 升級時再清舊版殘留的錯誤字樣(舊版憑證被擋的錯誤訊息);全新安裝本來就沒有
+  if (details && details.reason === 'update') chrome.storage.local.remove(['lastError', 'pendingError']);
 });
 chrome.runtime.onStartup.addListener(() => {
-  chrome.storage.local.remove(['cfTab', 'lastClearance']);
-});
-
-// 員工在遠通按「列印」下載憑證完成 → 憑證待補(pdfPending)時自動補跑一輪。
-// downloads 權限唯一用途＝偵測這件事:只看網址,不讀檔、不刪檔、不開檔、不取消。
-const FETC_PDF_HOST = 'www.fetc.net.tw';
-const FETC_PDF_PATH_LC = '/ux0000common/ux000006getpdf'; // 比對不分大小寫(存小寫)
-function isFetcPdfDownloadUrl(url) {
-  let u;
-  try {
-    u = new URL(String(url || ''));
-  } catch (e) {
-    return false;
-  }
-  return u.protocol === 'https:' && u.host === FETC_PDF_HOST && u.pathname.toLowerCase() === FETC_PDF_PATH_LC;
-}
-
-async function onDownloadComplete(id) {
-  let items = [];
-  try {
-    items = (await chrome.downloads.search({ id })) || [];
-  } catch (e) {
-    return;
-  }
-  const item = items[0];
-  if (!item || !isFetcPdfDownloadUrl(item.url)) return;
-  const o = await chrome.storage.local.get('pdfPending');
-  if (!o || o.pdfPending !== true) return;
-  await core.run({ trigger: 'download' });
-}
-
-chrome.downloads.onChanged.addListener((delta) => {
-  if (!delta || !delta.state || delta.state.current !== 'complete') return;
-  onDownloadComplete(delta.id).catch(() => {});
+  chrome.storage.local.remove(['cfTab', 'lastClearance', 'pdfPending']);
 });
 
 // popup:「執行」與開啟時的 peek(只心跳＋取統計)

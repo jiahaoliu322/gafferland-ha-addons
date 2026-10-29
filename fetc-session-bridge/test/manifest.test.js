@@ -8,11 +8,12 @@ const ROOT = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
 const manifest = JSON.parse(read('manifest.json'));
 
-test('manifest:version 2.1.0、權限清單(無 alarms)、background service worker', () => {
-  assert.equal(manifest.version, '2.1.0');
+test('manifest:version 2.2.0、權限清單(無 alarms、無 downloads)、background service worker', () => {
+  assert.equal(manifest.version, '2.2.0');
   assert.equal(manifest.manifest_version, 3);
-  assert.deepEqual([...manifest.permissions].sort(), ['clipboardWrite', 'cookies', 'downloads', 'scripting', 'storage', 'tabs']);
+  assert.deepEqual([...manifest.permissions].sort(), ['clipboardWrite', 'cookies', 'scripting', 'storage', 'tabs']);
   assert.ok(!manifest.permissions.includes('alarms'));
+  assert.ok(!manifest.permissions.includes('downloads'));
   assert.deepEqual(manifest.background, { service_worker: 'background.js' });
   assert.ok(fs.existsSync(path.join(ROOT, manifest.background.service_worker)));
 });
@@ -26,11 +27,11 @@ test('預設站台網址在 host_permissions 內', () => {
   assert.equal(core.isHostPermitted(core.DEFAULT_BASE_URL, manifest.host_permissions), true);
 });
 
-test('background.js 引入 agent-core.js、無 alarms、監聽 downloads.onChanged、接 gfl-peek', () => {
+test('background.js 引入 agent-core.js、無 alarms、無 downloads(b10)、接 gfl-peek', () => {
   const bg = read('background.js');
   assert.match(bg, /importScripts\('agent-core\.js'\)/);
   assert.ok(!/alarms/.test(bg), 'background 不得用 alarms');
-  assert.match(bg, /chrome\.downloads\.onChanged\.addListener\(/);
+  assert.ok(!/downloads/.test(bg), 'background 不得用 downloads(b10)');
   assert.match(bg, /'gfl-peek'/);
   assert.equal(require('../agent-core').ALARM_NAME, undefined);
   assert.equal(require('../agent-core').ALARM_PERIOD_MIN, undefined);
@@ -119,12 +120,12 @@ test('T2:logCallArgs 掃描器自測:巢狀括號／字串內括號／換行都�
   assert.ok(!hit("log('x', agent.agentId); const t = agent.token;"));
 });
 
-test('b4r:onStartup／onInstalled 一次性清舊鍵 cfTab＋lastClearance', () => {
+test('b4r→b10:onStartup／onInstalled 一次性清舊鍵 cfTab＋lastClearance＋pdfPending', () => {
   const bg = read('background.js');
   for (const ev of ['onStartup', 'onInstalled']) {
     const m = new RegExp(ev + '\\.addListener\\(([\\s\\S]*?)\\n\\}\\);').exec(bg);
     assert.ok(m, `找不到 ${ev} listener`);
-    assert.match(m[1], /chrome\.storage\.local\.remove\(\['cfTab', 'lastClearance'\]\)/, ev);
+    assert.match(m[1], /chrome\.storage\.local\.remove\(\['cfTab', 'lastClearance', 'pdfPending'\]\)/, ev);
   }
 });
 
@@ -137,6 +138,7 @@ const FORBIDDEN = [
   ['erase', /\berase\b/],
   ['.submit(', /\.submit\(/],
   ['GetPDF', /GetPDF/],
+  ['downloads.onChanged', /downloads\.onChanged/],
 ];
 function forbiddenHits(src) {
   return FORBIDDEN.filter(([, re]) => re.test(src)).map(([name]) => name);
@@ -159,6 +161,7 @@ test('b8:forbiddenHits 掃描器自測(每個禁字都抓得到;乾淨原始碼�
   assert.deepEqual(forbiddenHits('await dl.erase({ id: 1 })'), ['erase']);
   assert.deepEqual(forbiddenHits('form.submit();'), ['.submit(']);
   assert.deepEqual(forbiddenHits("const P = '/UX0000Common/UX000006GetPDF';"), ['GetPDF']);
+  assert.deepEqual(forbiddenHits('chrome.downloads.onChanged.addListener(f)'), ['downloads.onChanged']);
 });
 
 // ── b8 守門⑦:禁字、分頁網址只有 Member、agent-core 不碰 downloads ─────────────────
@@ -209,18 +212,12 @@ test('b8⑦:所有 tabs.create／tabs.update／windows.create 的 url 只能是 
   assert.equal(badTabNavs('chrome.tabs.update(id, { active: true, url: FETC_MEMBER_URL, x: { url: y } })').length, 1);
 });
 
-test('b8⑦:agent-core.js 不用 chrome.downloads;background 只用 downloads.onChanged／search,不 open', () => {
-  const core = read('agent-core.js');
-  assert.ok(!/downloads/.test(core), 'agent-core.js 出現 downloads');
-  const bg = read('background.js');
-  const used = [...bg.matchAll(/downloads\s*\.\s*(\w+)/g)].map((m) => m[1]);
-  assert.ok(used.includes('onChanged') && used.includes('search'));
-  assert.deepEqual([...new Set(used)].filter((x) => x !== 'onChanged' && x !== 'search'), []);
-  // GetPDF 路徑:agent-core 零出現;background 只在下載比對常數出現一次(小寫,比對不分大小寫)
-  assert.equal((core.match(/getpdf/gi) || []).length, 0);
-  const hits = bg.split('\n').filter((l) => /getpdf/i.test(l));
-  assert.equal(hits.length, 1);
-  assert.match(hits[0], /^const FETC_PDF_PATH_LC = '\/ux0000common\/ux000006getpdf';/);
+test('b8⑦→b10④:agent-core.js／background.js 都不用 downloads、零 GetPDF 路徑(不分大小寫)', () => {
+  for (const f of ['agent-core.js', 'background.js']) {
+    const src = read(f);
+    assert.ok(!/downloads/.test(src), `${f} 出現 downloads`);
+    assert.equal((src.match(/getpdf/gi) || []).length, 0, `${f} 出現 GetPDF 路徑`);
+  }
 });
 
 test('b8:popup 無輪詢文案、開啟即 gfl-peek、鈕叫「執行」', () => {
@@ -229,53 +226,21 @@ test('b8:popup 無輪詢文案、開啟即 gfl-peek、鈕叫「執行」', () =>
   assert.ok(!/每 5 分鐘|自動檢查/.test(js + html));
   assert.match(js, /type: "gfl-peek"/);
   assert.match(html, /<button id="runBtn" disabled>執行<\/button>/);
-  assert.match(html, /<div id="cfHint">憑證待補：請在遠通任一筆按一次「列印」；下載完成後會自動補跑，或再按「執行」。<\/div>/);
-  assert.match(js, /stored\.pdfPending === true/);
+  // b10:憑證指引＋「開啟匯入頁」鈕;刪除所有「列印後／下載完成後會自動補跑」文案
+  assert.match(html, /<div id="receiptHint"><div id="receiptHintText"><\/div><button id="openReceiptsBtn">開啟匯入頁<\/button><\/div>/);
+  assert.match(js, /`憑證 \$\{receiptsPending\} 份待補：到遠通下載該車的通行費紀錄 PDF，再到網站「eTag 待補憑證」匯入（擴充功能不會自動抓憑證）。`/);
+  assert.ok(!/cfHint|pdfPending/.test(js + html), 'popup 不再有 cfHint／pdfPending');
+  assert.ok(!/列印後會自動補跑|下載完成後會自動補跑/.test(js + html), 'popup 還有自動補跑文案');
 });
 
-// ── b78f F-3:解除配對清殘留;cfHint 只在「已配對 且 pdfPending===true」顯示 ─────────────
+// ── b78f F-3:解除配對清殘留(b10:pdfPending 拿掉、加 lastError／pendingError;popup 執行期案移到 b10.test.js)──
 
-test('b78f F-3:options.js 解除配對清 agent／pdfPending／lastPeek／cinCache,不再列 cfTab', () => {
+test('b78f F-3→b10③:options.js 解除配對清 agent／lastPeek／cinCache／lastError／pendingError,不再列 cfTab／pdfPending', () => {
   const js = read('options.js');
   const m = js.match(/async function onUnpair\(\) \{\s*await chrome\.storage\.local\.remove\((\[[^\]]*\])\)/);
   assert.ok(m, '找得到 onUnpair 的 remove 清單');
   const keys = JSON.parse(m[1]);
-  for (const k of ['agent', 'pdfPending', 'lastPeek', 'cinCache']) assert.ok(keys.includes(k), k);
+  for (const k of ['agent', 'lastPeek', 'cinCache', 'lastError', 'pendingError']) assert.ok(keys.includes(k), k);
   assert.ok(!keys.includes('cfTab'));
+  assert.ok(!keys.includes('pdfPending'));
 });
-
-// 在 vm 裡用 linkedom 的 popup.html＋假 chrome 真的跑 popup.js,看 #cfHint 的 display
-async function renderPopup(stored) {
-  const { parseHTML } = require('linkedom');
-  const vm = require('node:vm');
-  const realCore = require('../agent-core');
-  const { makeFakeChrome } = require('./helpers/fake-chrome');
-  const { document } = parseHTML(read('popup.html'));
-  const fake = makeFakeChrome({});
-  await fake.local.set(stored);
-  const paired = !!stored.agent;
-  fake.chrome.runtime.sendMessage = async (msg) =>
-    msg.type === 'gfl-peek'
-      ? { ok: true, result: { paired, loggedIn: true, queue: { byType: { 'settle-query': 0, scan: 0, 'settle-print': 1, 'attach-print': 0 } }, mode: 'browser' } }
-      : { ok: true };
-  fake.chrome.runtime.openOptionsPage = () => {};
-  const ctx = { document, chrome: fake.chrome, GflAgentCore: realCore, console: { log() {}, error() {} } };
-  vm.createContext(ctx);
-  vm.runInContext(read('popup.js'), ctx);
-  for (let i = 0; i < 30; i++) await new Promise((r) => setImmediate(r));
-  return document;
-}
-
-const SYNTH_AGENT = { agentId: 'ag1', token: 'TESTTOKEN-synthetic', name: '測試電腦', baseUrl: 'https://admin.gafferland.com' };
-for (const [label, stored, want] of [
-  ['未配對＋pdfPending=true(解除配對殘留)', { pdfPending: true }, 'none'],
-  ['已配對＋pdfPending=true', { agent: SYNTH_AGENT, pdfPending: true }, 'block'],
-  ['已配對＋pdfPending=false', { agent: SYNTH_AGENT, pdfPending: false }, 'none'],
-  ['已配對＋pdfPending 未設', { agent: SYNTH_AGENT }, 'none'],
-]) {
-  test(`b78f F-3:popup 執行期 #cfHint:${label} → display ${want}`, async () => {
-    const doc = await renderPopup(stored);
-    assert.equal(doc.getElementById('cfHint').style.display, want);
-    if (!stored.agent) assert.equal(doc.getElementById('agentVal').textContent, '未配對', '確認 popup 真的跑完 renderAgent');
-  });
-}

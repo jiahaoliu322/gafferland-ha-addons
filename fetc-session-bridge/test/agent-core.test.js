@@ -183,8 +183,9 @@ test('憑證工作內 cf-challenge:只擋憑證——照回報 cf-challenge、�
   assert.deepEqual(ran, ['a', 'b']);
   assert.equal(t.calls.tabsRemoved.length, 1);
   assert.equal(t.local.m.has('cfTab'), false);
-  assert.equal(t.local.m.get('pdfPending'), true);
-  assert.equal(lastRun(t).state, 'cf-interactive');
+  // b10:憑證工作被擋＝一般錯誤(不寫 pdfPending、整輪不停,lastRun 照一般完成)
+  assert.equal(t.local.m.has('pdfPending'), false);
+  assert.equal(lastRun(t).state, 'ok');
 });
 
 test('單筆逾時(4 分鐘):回報 error,不卡住', async () => {

@@ -102,7 +102,7 @@
   .row .v.ok { color: #4ade80; }
   .row .v.no { color: #f5c451; }
   .row .v.bad { color: #f87171; }
-  #cfHint {
+  #receiptHint {
     display: none;
     margin-top: 8px;
     padding: 8px 10px;
@@ -130,7 +130,7 @@
     line-height: 1.5;
     margin: 6px 0 0;
   }
-  #openFetcBtn, #openSettingsBtn {
+  #openFetcBtn, #openSettingsBtn, #openReceiptsBtn {
     background: #2a2d33;
     color: #e6e6e6;
     border: 1px solid #3a3d45;
@@ -170,7 +170,7 @@
     <div class="row"><span class="k">上次執行</span><span class="v" id="lastRunVal">讀取中…</span></div>
     <div class="row" id="lastErrRow" style="display:none;"><span class="k">最後錯誤</span><span class="v" id="lastErrVal"></span></div>
   </div>
-  <div id="cfHint">憑證待補：請在遠通任一筆按一次「列印」；下載完成後會自動補跑，或再按「執行」。</div>
+  <div id="receiptHint"><div id="receiptHintText"></div><button id="openReceiptsBtn">開啟匯入頁</button></div>
 
   <button id="runBtn" disabled>執行</button>
   <p id="runNote"></p>
