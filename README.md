@@ -7,4 +7,4 @@ HA → 設定 → 附加元件 → 附加元件商店 → 右上 ⋮ → 儲存�
 貼上 `https://github.com/jiahaoliu322/gafferland-ha-addons` → 新增。
 
 ## 內含
-- **etag-relay** — 遠通(FETC)eTag 通行明細中繼服務(供 Gafferland Vercel cron-etag 以台灣住宅 IP 出口查詢)。設定與部署見 `etag-relay/DEPLOY.md`。
+- **Gafferland Relay**(資料夾 `etag-relay`)— Gafferland 簡訊轉送(every8d)與店內對外 IP 心跳中繼(台灣住宅 IP 出口)。0.8.0 起遠通 eTag 舊路由已拆除。設定與部署見 `etag-relay/DEPLOY.md`。

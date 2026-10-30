@@ -1,6 +1,8 @@
-# 部署步驟(使用者操作)
+# 部署步驟(使用者操作)——Gafferland Relay
 
 > 本文件的主機名／tunnel 名稱以佔位符表示,實際值見私有 docs(不上傳)。
+> 0.8.0 起 add-on 名稱改為 **Gafferland Relay**,只做簡訊轉送(`POST /sms`)與店內 IP 心跳;
+> 遠通 eTag 路由已拆除。資料夾 `etag-relay/`、slug、映像名都沒改。
 
 ## 部署模型
 
@@ -15,6 +17,10 @@ bump**,否則新映像雖然推上 ghcr,HA 端 tag 對不上、永遠不會抓�
 
 - **0.6.0**:新增「店內 IP 心跳」(見 `README.md` 同名章節與下方步驟 3 的
   `PUNCH_SITEIP_URL` 說明)。HA 端只需按「更新」,零新必填設定。
+- **0.8.0**:改名 Gafferland Relay、拆遠通 eTag 路由(`/query`、`/print`、`/session`、
+  keep-alive)。HA 端按「更新」即可;**更新到 0.8.0 後,設定頁的遠通帳密欄
+  (`FETC_ACCOUNT`/`FETC_PASSWORD`)可以清空**(程式已不讀取;schema 暫留選填只為讓舊設定
+  通過驗證,下版移除)。舊版留在 `/data/session.json` 的遠通 session 檔,0.8.0 啟動時會自動刪除。
 
 ## 1. 建 GitHub repo
 
@@ -38,19 +44,19 @@ your-repo/
 
 Home Assistant → **設定 →附加元件 →附加元件商店** → 右上角選單「儲存庫」→
 貼上你的 repo URL(如 `https://github.com/<you>/etag-relay-addon`)→ 加入後
-重新整理,商店列表會出現「eTag Relay」。
+重新整理,商店列表會出現「Gafferland Relay」(0.7.x 以前叫「eTag Relay v3」)。
 
 ## 3. 安裝 + 設定
 
-點進「eTag Relay」→ 安裝 → **設定**分頁填入:
+點進「Gafferland Relay」→ 安裝 → **設定**分頁填入:
 
 | 欄位 | 說明 |
 |---|---|
-| `FETC_ACCOUNT` | ⚠ 0.5.0 起無功能用途(登入流程已拆除,session 改由 Chrome 擴充功能餵入)——可留空,保留只是 Supervisor schema 相容舊設定 |
-| `FETC_PASSWORD` | 同上,0.5.0 起無功能用途,可留空 |
-| `RELAY_SECRET` | 自訂一組長隨機字串(建議 32 bytes 以上)。所有端點(`/query`/`/print`/`/health`/`/session`)皆驗此值,與 Vercel 端 `ETAG_RELAY_SECRET` 一致 |
-| `VERCEL_CAPTCHA_URL` | ⚠ 別被舊名字誤導,**不是**驗證碼用途了——`POST /session` 驗證通過、換上新 session 後,relay 回呼這個 Vercel URL(`etag-captcha` 端點,實際路徑以 Vercel 端實作為準)觸發「有單即自動補跑結算」 |
-| `VERCEL_CALLBACK_SECRET` | 中繼呼叫 Vercel `etag-captcha` 時帶的 `secret` 欄位值(需與 Vercel 端 `ETAG_RELAY_CALLBACK_SECRET` 一致) |
+| `FETC_ACCOUNT` | ⚠ 0.8.0 起已從預設設定移除、程式不讀取——**可以清空**;schema 暫留選填只為相容舊設定 |
+| `FETC_PASSWORD` | 同上,**可以清空** |
+| `RELAY_SECRET` | 自訂一組長隨機字串(建議 32 bytes 以上)。所有端點(`/sms`/`/health`)皆驗此值(`X-Relay-Secret` header),與 Vercel 端 `ETAG_RELAY_SECRET` 一致 |
+| `VERCEL_CAPTCHA_URL` | ⚠ 別被舊名字誤導,**不是**驗證碼用途了——0.8.0 起只用來取站台 origin,推導店內 IP 心跳目的地 `<origin>/api/punch?action=site-ip`。填站台任一 API 網址即可(例:`https://<站台網域>/api/collect`) |
+| `VERCEL_CALLBACK_SECRET` | 店內 IP 心跳 POST 時帶的 `secret` 欄位值(需與 Vercel 端 `ETAG_RELAY_CALLBACK_SECRET` 一致) |
 | `PUBLIC_BASE_URL` | ⚠ 已停用,選填。舊版曾用來組驗證碼圖片端點的完整 URL,該端點已隨登入流程一併拆除,程式碼不再讀取這個值 |
 | `PUNCH_SITEIP_URL` | 0.6.0 新增,選填,一般留空。店內 IP 心跳(每 5 分鐘 POST Vercel 一次目前店內對外 IP,供員工打卡 Wi-Fi 判定)的目的地 URL 覆寫——不填時預設由 `VERCEL_CAPTCHA_URL` 取 origin 推導出 `/api/punch?action=site-ip`,只有 Vercel 端點路徑改變時才需要填 |
 
@@ -71,7 +77,7 @@ Home Assistant → **設定 →附加元件 →附加元件商店** → 右上�
      (Vercel)進得來。產生 service token 後記下 `CF_ACCESS_CLIENT_ID` /
      `CF_ACCESS_CLIENT_SECRET`,待會填進 Vercel env。
 3. `<RELAY_HOST>/health` 用 curl 帶 `X-Relay-Secret` 應回
-   `{"ok":true,...}`(driving through Access 需另帶 `CF-Access-Client-Id` /
+   `{"ok":true,"siteIpHeartbeat":{...}}`(driving through Access 需另帶 `CF-Access-Client-Id` /
    `CF-Access-Client-Secret` header,視 Access 規則設定)。
 
 ## 5. Vercel env
@@ -84,35 +90,17 @@ Vercel 專案 → Settings → Environment Variables 新增:
 | `ETAG_RELAY_SECRET` | 與 add-on `RELAY_SECRET` 一致 |
 | `CF_ACCESS_CLIENT_ID` | 步驟 4 產生的 service token ID |
 | `CF_ACCESS_CLIENT_SECRET` | 步驟 4 產生的 service token secret |
-| `ETAG_RELAY_CALLBACK_SECRET` | 與 add-on `VERCEL_CALLBACK_SECRET` 一致 |
+| `ETAG_RELAY_CALLBACK_SECRET` | 與 add-on `VERCEL_CALLBACK_SECRET` 一致(站台 `api/punch.js action=site-ip` 用它驗心跳) |
 
+站台 `lib/sms.js` 經 `ETAG_RELAY_URL` + `/sms` 送簡訊(雙層驗證:CF Access service token +
+`X-Relay-Secret`)。env 名稱沿用舊的 `ETAG_RELAY_*`,沒有改名。
 （`FETC_ACCOUNT`/`FETC_PASSWORD` 已無功能用途,Vercel 端不需要、也不應該存這兩個值。）
-
-## 6. 建立/更新 session
-
-Add-on 啟動後 session 是空的,需要使用者手動餵入一次(之後靠 keep-alive 保溫,失效
-才需要重新操作這一步):
-
-1. 在自己電腦的 Chrome 安裝 `fetc-session-bridge` 擴充功能(見該資料夾
-   `README.md`)。
-2. 同一個 Chrome 先登入 Gafferland 後台(擴充要靠這個身分把 cookies 轉發給站台)。
-3. 再登入遠通電收(fetc.net.tw)會員區。
-4. 點擴充功能圖示 →「更新 Gafferland session」。
-5. 擴充把 cookies 送進 Gafferland 站台 → 站台轉發到這個中繼的 `POST /session`
-   → 中繼用 `getAntiForgeryToken` 真驗證,通過才生效。add-on Log 應出現
-   `[etag-relay] /session 收到新 session,驗證通過,已存檔並回呼 Vercel`。
-6. `curl -H "X-Relay-Secret: ..." https://<RELAY_HOST>/health`
-   確認 `sessionValid` 轉為 `true`。
-
-疑難排解(403 / session 無效)見 `fetc-session-bridge/README.md`。
 
 ## 驗收
 
-- Add-on Log 顯示啟動成功、無例外。
+- Add-on Log 顯示 `[etag-relay] listening on :8099`、無例外;約 15 秒後出現
+  `[etag-relay] site-ip 心跳 ok ip=…`(店內對外 IP)。
 - `curl -H "X-Relay-Secret: ..." https://<RELAY_HOST>/health` 回
-  `{"ok":true,"sessionValid":false,...}`(尚未餵入 session 前 `sessionValid` 應為
-  `false`,這是預期行為)。
-- 完成上方「建立/更新 session」步驟後,`sessionValid` 應轉為 `true`。
-
-後續步驟:Vercel `settleEtagOrders`/`cron-etag`/`etag-captcha` action/`line-webhook`
-擴充見主線計劃,不在本文件範圍。
+  `{"ok":true,"siteIpHeartbeat":{"lastOkAt":<時間戳>,"lastIp":"<店內對外 IP>"}}`。
+- 不帶或帶錯 `X-Relay-Secret` 一律 `401`;`/query`、`/print`、`/session` 回 `404`(0.8.0 已拆)。
+- 簡訊實測走站台(發一封 OTP),add-on Log 應出現 `[etag-relay] /sms dest=09xx***xxx status=200`。

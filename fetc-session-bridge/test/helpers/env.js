@@ -1,13 +1,12 @@
 'use strict';
-// 測試共用:linkedom 的 parseHtml、relay 路徑、fixture 讀取、stub 遠通站台。
-// 全部合成資料(零真實車牌／帳號)。
+// 測試共用:linkedom 的 parseHtml、fixture 讀取、stub 遠通站台。
+// 全部合成資料(零真實車牌／帳號)。fixtures 原在 etag-relay/fixtures,中繼 0.8.0 拆 eTag 路由時
+// 原封搬進 test/fixtures(逐位元組相同,golden 仍對得上)。
 const fs = require('fs');
 const path = require('path');
 const { DOMParser } = require('linkedom');
 
-const BRIDGE_DIR = path.join(__dirname, '..', '..');
-const RELAY_DIR = path.join(BRIDGE_DIR, '..', 'etag-relay');
-const FIXTURE_DIR = path.join(RELAY_DIR, 'fixtures');
+const FIXTURE_DIR = path.join(__dirname, '..', 'fixtures');
 const GOLDEN_DIR = path.join(__dirname, '..', 'golden');
 
 function parseHtml(html) {
@@ -102,5 +101,5 @@ function normalize(entry) {
 
 module.exports = {
   BASE, TEST_PLATE, TEST_CIN, TEST_TOKEN, MEMBER_HTML, SETTING_HTML, LOGIN_HTML, CF_HTML, PDF_BYTES, RICH_PRINT_HTML,
-  RELAY_DIR, FIXTURE_DIR, GOLDEN_DIR, parseHtml, fixture, makeSite, makeStubFetch, normalize,
+  FIXTURE_DIR, GOLDEN_DIR, parseHtml, fixture, makeSite, makeStubFetch, normalize,
 };

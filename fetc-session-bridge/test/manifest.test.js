@@ -8,10 +8,11 @@ const ROOT = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
 const manifest = JSON.parse(read('manifest.json'));
 
-test('manifest:version 2.2.0、權限清單(無 alarms、無 downloads)、background service worker', () => {
-  assert.equal(manifest.version, '2.2.0');
+test('manifest:version 2.3.0、權限清單(無 alarms、無 downloads、2.3.0 起無 clipboardWrite)、background service worker', () => {
+  assert.equal(manifest.version, '2.3.0');
   assert.equal(manifest.manifest_version, 3);
-  assert.deepEqual([...manifest.permissions].sort(), ['clipboardWrite', 'cookies', 'scripting', 'storage', 'tabs']);
+  assert.deepEqual([...manifest.permissions].sort(), ['cookies', 'scripting', 'storage', 'tabs']);
+  assert.ok(!manifest.permissions.includes('clipboardWrite'), 'clipboardWrite 只為舊中繼「複製 Cookie 字串」存在');
   assert.ok(!manifest.permissions.includes('alarms'));
   assert.ok(!manifest.permissions.includes('downloads'));
   assert.deepEqual(manifest.background, { service_worker: 'background.js' });
@@ -37,17 +38,24 @@ test('background.js 引入 agent-core.js、無 alarms、無 downloads(b10)、接
   assert.equal(require('../agent-core').ALARM_PERIOD_MIN, undefined);
 });
 
-test('popup.html:舊中繼兩個鈕在「舊中繼(備援)」摺疊區內,文案不變', () => {
+test('2.3.0:popup 已拿掉「舊中繼(備援)」摺疊區——無 details、兩個鈕、relay-session 呼叫、複製 Cookie 與相關函式', () => {
   const html = read('popup.html');
-  const m = /<details class="legacy">([\s\S]*?)<\/details>/.exec(html);
-  assert.ok(m, '找不到摺疊區');
-  assert.match(m[1], /<summary>舊中繼\(備援\)<\/summary>/);
-  assert.match(m[1], /id="primaryBtn"/);
-  assert.match(m[1], /<button id="copyBtn">複製 Cookie 字串<\/button>/);
   const js = read('popup.js');
-  assert.match(js, /"更新 Gafferland session"/);
-  assert.match(js, /action=relay-session/);
-  assert.match(js, /已複製,可貼到 \/collect 的「貼 Cookie 補救」/);
+  assert.ok(!/<details\b/i.test(html), 'popup.html 還有 <details>');
+  assert.ok(!/舊中繼\(備援\)|class="legacy"|details\.legacy/.test(html), 'popup.html 還有舊中繼區或其樣式');
+  for (const id of ['status', 'hint', 'primaryBtn', 'message', 'copyBtn']) {
+    assert.ok(!new RegExp(`id="${id}"`).test(html), `popup.html 還有 #${id}`);
+    assert.ok(!new RegExp(`#${id}\\b`).test(html), `popup.html 還有 #${id} 樣式`);
+  }
+  assert.ok(!/relay-session/.test(js), 'popup.js 還呼叫 relay-session');
+  assert.ok(!/clipboard/.test(js), 'popup.js 還用 clipboard');
+  assert.ok(!/更新 Gafferland session|複製 Cookie|貼 Cookie 補救/.test(js + html), '還有舊中繼文案');
+  for (const fn of ['onUpdateSession', 'onCopyCookies', 'getFlattenedCookies', 'getBaseUrl', 'renderLoginState', 'showMessage', 'hideMessage']) {
+    assert.ok(!new RegExp(`\\b${fn}\\b`).test(js), `popup.js 還有 ${fn}`);
+  }
+  // 設定連結仍在且有接
+  assert.match(html, /id="optionsLink"/);
+  assert.match(js, /optionsLink\.addEventListener\("click"/);
 });
 
 test('popup.html／options.html 零 inline script,且載入 agent-core.js', () => {

@@ -37,7 +37,7 @@
   const QUERY_TYPES = ['settle-query', 'scan'];
   // popup「憑證 M 份」只算數字用;擴充功能不做憑證(2.2.0 起站台也不發給電腦,待補憑證由網站匯入)
   const RECEIPT_TYPES = ['settle-print', 'attach-print'];
-  const TRIGGERS = ['popup', 'download'];
+  const TRIGGERS = ['popup']; // 2.3.0 拿掉 2.1.x 下載觸發的死值 'download'
   // 頁面回傳可信度:reason 只收 10-common 列的值;cinCache 限 key/value 長度與筆數
   const ALLOWED_REASONS = ['login-required', 'cf-interactive', 'cf-challenge', 'no-rows', 'cin-not-found', 'pdf-failed', 'error'];
   const CIN_MAX_ENTRIES = 200;
@@ -648,7 +648,7 @@
     }
 
     // 對外:run。同時只跑一個(記憶體旗標擋同一個 SW 內的並行;storage.session 鎖擋 SW 重啟後的殘留,5 分鐘過期)
-    // opts.trigger:'popup'(按「執行」)｜'download'(2.1.x 下載觸發的舊值,2.2.0 已無呼叫端)｜undefined,記進 lastRun.trigger
+    // opts.trigger:'popup'(按「執行」)｜undefined,記進 lastRun.trigger;其他值(含 2.1.x 的舊值 'download')一律當沒給
     async function run(opts) {
       if (running) return { skipped: 'busy' };
       running = true;

@@ -1,0 +1,825 @@
+{
+ "scalars": {
+  "wallTs": [
+   1784550645000,
+   1784509323000,
+   1784599321000,
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   1783254645000,
+   1783213323000,
+   1783303321000,
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   1784550645000,
+   1784509323000,
+   1784599321000,
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   }
+  ],
+  "combine": "2026/07/20 01:02:03",
+  "parseAmount": [
+   650.4,
+   7,
+   1234.5,
+   1.6,
+   -3,
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   {
+    "$num": "NaN"
+   },
+   12
+  ]
+ },
+ "edge": {
+  "detail": [
+   [],
+   [],
+   [
+    {
+     "timeStr": "2026/07/20 01:02:03",
+     "timeTs": 1784509323000,
+     "gantry": null,
+     "route": "",
+     "amount": {
+      "$num": "NaN"
+     }
+    }
+   ],
+   [
+    {
+     "timeStr": "2026/07/20 01:02:03",
+     "timeTs": 1784509323000,
+     "gantry": "G",
+     "route": "A & B",
+     "amount": 1234.5
+    }
+   ],
+   [
+    {
+     "timeStr": "2026/07/20 01:02:03",
+     "timeTs": 1784509323000,
+     "gantry": "G_X_Y",
+     "route": "路線",
+     "amount": {
+      "$num": "NaN"
+     }
+    }
+   ],
+   [
+    {
+     "timeStr": "2026/07/20 9:5:7",
+     "timeTs": {
+      "$num": "NaN"
+     },
+     "gantry": null,
+     "route": "r",
+     "amount": 3
+    }
+   ],
+   [
+    {
+     "timeStr": "2026/07/20 01:02:03",
+     "timeTs": 1784509323000,
+     "gantry": "G2",
+     "route": "R",
+     "amount": 2
+    }
+   ]
+  ],
+  "search": [
+   [],
+   [
+    {
+     "batchId": "B1",
+     "date": "2026/07/20"
+    }
+   ],
+   []
+  ],
+  "print": [
+   {
+    "rows": [],
+    "total": null
+   },
+   {
+    "rows": [
+     {
+      "time": "a",
+      "route": "",
+      "mileage": "",
+      "toll": ""
+     }
+    ],
+    "total": null
+   },
+   {
+    "rows": [],
+    "total": {
+     "mileage": "3",
+     "toll": "4元"
+    }
+   },
+   {
+    "rows": [
+     {
+      "time": "1",
+      "route": "AB",
+      "mileage": "2",
+      "toll": "3元"
+     }
+    ],
+    "total": null
+   }
+  ]
+ },
+ "fixtures": {
+  "search": [
+   {
+    "batchId": "2607200000000000001",
+    "date": "2026/07/20"
+   },
+   {
+    "batchId": "2607200000000000002",
+    "date": "2026/07/21"
+   }
+  ],
+  "detail": [
+   {
+    "timeStr": "2026/07/20 12:30:45",
+    "timeTs": 1784550645000,
+    "gantry": "01F0293N",
+    "route": "五股-高公局",
+    "amount": 7
+   },
+   {
+    "timeStr": "2026/07/20 13:15:00",
+    "timeTs": 1784553300000,
+    "gantry": "01H0350S",
+    "route": "機場系統-五股",
+    "amount": 12
+   },
+   {
+    "timeStr": "2026/07/20 14:00:10",
+    "timeTs": 1784556010000,
+    "gantry": "03F0498N",
+    "route": "高公局-中和",
+    "amount": 15
+   }
+  ],
+  "print": {
+   "rows": [
+    {
+     "time": "04:01:47",
+     "route": "五股-高公局",
+     "mileage": "1.4",
+     "toll": "1.6元"
+    },
+    {
+     "time": "05:30:12",
+     "route": "高公局-中和",
+     "mileage": "5.6",
+     "toll": "7.8元"
+    }
+   ],
+   "total": {
+    "mileage": "7.0",
+    "toll": "9.4元"
+   }
+  }
+ },
+ "fieldToken": [
+  "t1",
+  null,
+  null,
+  null
+ ],
+ "loginRedirect": [
+  true,
+  true,
+  false
+ ],
+ "limits": {
+  "detail": {
+   "length": 500,
+   "sha256": "fb944e15a9b7ce415cf076f18292eff0e5c714446bc93d52a3125d16995fe3c3"
+  },
+  "search": {
+   "length": 100,
+   "sha256": "c18676b8a1256221704f1ca3825af8ed89606caa62bb3b39218ea92a71a26974"
+  },
+  "print": {
+   "length": 5000,
+   "sha256": "9d90bce629d79128c5b71fd98299c84603b2a3a48e54b890d837c2459a052d75"
+  }
+ },
+ "queryPlate": {
+  "log": [
+   {
+    "method": "GET",
+    "path": "/Member",
+    "headers": {},
+    "body": null
+   },
+   {
+    "method": "GET",
+    "path": "/Member/Setting",
+    "headers": {},
+    "body": null
+   },
+   {
+    "method": "POST",
+    "path": "/UX0505Traffic/UX050506TrafficAdvancedSearch",
+    "headers": {
+     "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+     "__requestverificationtoken": "tok-synth-abc",
+     "x-requested-with": "XMLHttpRequest"
+    },
+    "body": [
+     [
+      "__RequestVerificationToken",
+      "tok-synth-abc"
+     ],
+     [
+      "cln",
+      "TEST-001"
+     ],
+     [
+      "cin",
+      "CIN-SYNTH-001"
+     ],
+     [
+      "rdoRatingDate",
+      "1"
+     ],
+     [
+      "ratingStartDate",
+      "2026/07/20"
+     ],
+     [
+      "ratingEndDate",
+      "2026/07/21"
+     ],
+     [
+      "weekend",
+      "-1"
+     ],
+     [
+      "weekend",
+      "0"
+     ],
+     [
+      "weekend",
+      "1"
+     ],
+     [
+      "weekend",
+      "2"
+     ],
+     [
+      "weekend",
+      "3"
+     ],
+     [
+      "weekend",
+      "4"
+     ],
+     [
+      "weekend",
+      "5"
+     ],
+     [
+      "weekend",
+      "6"
+     ],
+     [
+      "rdoGantryId",
+      "0"
+     ],
+     [
+      "gantryId",
+      "---"
+     ],
+     [
+      "gantryIdSearch",
+      ""
+     ],
+     [
+      "rdoRatingAmt",
+      "0"
+     ],
+     [
+      "ratingAmtMin",
+      ""
+     ],
+     [
+      "ratingAmtMax",
+      ""
+     ],
+     [
+      "paymentStatus",
+      "0"
+     ],
+     [
+      "X-Requested-With",
+      "XMLHttpRequest"
+     ]
+    ]
+   },
+   {
+    "method": "POST",
+    "path": "/UX0505Traffic/UX050507AdvancedSearchDetail",
+    "headers": {
+     "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+     "__requestverificationtoken": "tok-synth-abc",
+     "x-requested-with": "XMLHttpRequest"
+    },
+    "body": [
+     [
+      "__RequestVerificationToken",
+      "tok-synth-abc"
+     ],
+     [
+      "cin",
+      "CIN-SYNTH-001"
+     ],
+     [
+      "cln",
+      "TEST-001"
+     ],
+     [
+      "txBatchId",
+      "2607200000000000001"
+     ]
+    ]
+   },
+   {
+    "method": "POST",
+    "path": "/UX0505Traffic/UX050507AdvancedSearchDetail",
+    "headers": {
+     "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+     "__requestverificationtoken": "tok-synth-abc",
+     "x-requested-with": "XMLHttpRequest"
+    },
+    "body": [
+     [
+      "__RequestVerificationToken",
+      "tok-synth-abc"
+     ],
+     [
+      "cin",
+      "CIN-SYNTH-001"
+     ],
+     [
+      "cln",
+      "TEST-001"
+     ],
+     [
+      "txBatchId",
+      "2607200000000000002"
+     ]
+    ]
+   }
+  ],
+  "transactions": [
+   {
+    "timeStr": "2026/07/20 12:30:45",
+    "timeTs": 1784550645000,
+    "gantry": "01F0293N",
+    "route": "五股-高公局",
+    "amount": 7
+   },
+   {
+    "timeStr": "2026/07/20 13:15:00",
+    "timeTs": 1784553300000,
+    "gantry": "01H0350S",
+    "route": "機場系統-五股",
+    "amount": 12
+   },
+   {
+    "timeStr": "2026/07/20 14:00:10",
+    "timeTs": 1784556010000,
+    "gantry": "03F0498N",
+    "route": "高公局-中和",
+    "amount": 15
+   },
+   {
+    "timeStr": "2026/07/21 12:30:45",
+    "timeTs": 1784637045000,
+    "gantry": "01F0293N",
+    "route": "五股-高公局",
+    "amount": 7
+   },
+   {
+    "timeStr": "2026/07/21 13:15:00",
+    "timeTs": 1784639700000,
+    "gantry": "01H0350S",
+    "route": "機場系統-五股",
+    "amount": 12
+   },
+   {
+    "timeStr": "2026/07/21 14:00:10",
+    "timeTs": 1784642410000,
+    "gantry": "03F0498N",
+    "route": "高公局-中和",
+    "amount": 15
+   }
+  ],
+  "total": 68
+ },
+ "printChain": {
+  "log": [
+   {
+    "method": "GET",
+    "path": "/Member",
+    "headers": {},
+    "body": null
+   },
+   {
+    "method": "GET",
+    "path": "/Member/Setting",
+    "headers": {},
+    "body": null
+   },
+   {
+    "method": "POST",
+    "path": "/UX0505Traffic/UX050506TrafficAdvancedSearch",
+    "headers": {
+     "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+     "__requestverificationtoken": "tok-synth-abc",
+     "x-requested-with": "XMLHttpRequest"
+    },
+    "body": [
+     [
+      "__RequestVerificationToken",
+      "tok-synth-abc"
+     ],
+     [
+      "cln",
+      "TEST-001"
+     ],
+     [
+      "cin",
+      "CIN-SYNTH-001"
+     ],
+     [
+      "rdoRatingDate",
+      "1"
+     ],
+     [
+      "ratingStartDate",
+      "2026/07/20"
+     ],
+     [
+      "ratingEndDate",
+      "2026/07/21"
+     ],
+     [
+      "weekend",
+      "-1"
+     ],
+     [
+      "weekend",
+      "0"
+     ],
+     [
+      "weekend",
+      "1"
+     ],
+     [
+      "weekend",
+      "2"
+     ],
+     [
+      "weekend",
+      "3"
+     ],
+     [
+      "weekend",
+      "4"
+     ],
+     [
+      "weekend",
+      "5"
+     ],
+     [
+      "weekend",
+      "6"
+     ],
+     [
+      "rdoGantryId",
+      "0"
+     ],
+     [
+      "gantryId",
+      "---"
+     ],
+     [
+      "gantryIdSearch",
+      ""
+     ],
+     [
+      "rdoRatingAmt",
+      "0"
+     ],
+     [
+      "ratingAmtMin",
+      ""
+     ],
+     [
+      "ratingAmtMax",
+      ""
+     ],
+     [
+      "paymentStatus",
+      "0"
+     ],
+     [
+      "X-Requested-With",
+      "XMLHttpRequest"
+     ]
+    ]
+   },
+   {
+    "method": "POST",
+    "path": "/UX0505Traffic/UX050507AdvancedSearchDetail",
+    "headers": {
+     "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+     "__requestverificationtoken": "tok-synth-abc",
+     "x-requested-with": "XMLHttpRequest"
+    },
+    "body": [
+     [
+      "__RequestVerificationToken",
+      "tok-synth-abc"
+     ],
+     [
+      "cin",
+      "CIN-SYNTH-001"
+     ],
+     [
+      "cln",
+      "TEST-001"
+     ],
+     [
+      "txBatchId",
+      "2607200000000000001"
+     ]
+    ]
+   },
+   {
+    "method": "POST",
+    "path": "/UX0505Traffic/UX050507AdvancedSearchDetail",
+    "headers": {
+     "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+     "__requestverificationtoken": "tok-synth-abc",
+     "x-requested-with": "XMLHttpRequest"
+    },
+    "body": [
+     [
+      "__RequestVerificationToken",
+      "tok-synth-abc"
+     ],
+     [
+      "cin",
+      "CIN-SYNTH-001"
+     ],
+     [
+      "cln",
+      "TEST-001"
+     ],
+     [
+      "txBatchId",
+      "2607200000000000002"
+     ]
+    ]
+   },
+   {
+    "method": "POST",
+    "path": "/UX0505Traffic/UX050508TrafficAdvancedSearchPrint",
+    "headers": {
+     "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+     "__requestverificationtoken": "tok-synth-abc",
+     "x-requested-with": "XMLHttpRequest"
+    },
+    "body": [
+     [
+      "__RequestVerificationToken",
+      "tok-synth-abc"
+     ],
+     [
+      "cln",
+      "TEST-001"
+     ],
+     [
+      "cin",
+      "CIN-SYNTH-001"
+     ],
+     [
+      "dateTimeJSON",
+      "{\"2607200000000000001\":[\"2026/07/20 12:30:45\"],\"2607200000000000002\":[\"2026/07/21 14:00:10\"]}"
+     ]
+    ]
+   },
+   {
+    "method": "POST",
+    "path": "/UX0000Common/UX000006GetPDF?&r=N",
+    "headers": {
+     "content-type": "application/x-www-form-urlencoded"
+    },
+    "body": [
+     [
+      "content",
+      "PCFET0NUWVBFIGh0bWw+PGh0bWwgbGFuZz0iemgtVFciPjxoZWFkPgo8bWV0YSBjaGFyc2V0PSJ1dGYtOCI+Cjx0aXRsZT7lkIjmiJDmuKzoqaYgZml4dHVyZSDigJQgcHJpbnQ8L3RpdGxlPgo8L2hlYWQ+PGJvZHk+CjxkaXYgaWQ9InByaW50RGV0YWlsIj4KICA8dGFibGUgaWQ9InRibEZlZUxpc3QiIGNsYXNzPSJ0YWJsZSI+CiAgICA8dGhlYWQ+CiAgICAgIDx0cj48dGg+5pmC6ZaTPC90aD48dGg+6KGM6LuK6Lev57eaPC90aD48dGg+6YeM56iLPC90aD48dGg+6YCa6KGM6LK7PC90aD48L3RyPgogICAgPC90aGVhZD4KICAgIDx0Ym9keT4KICAgICAgPHRyIGNsYXNzPSJkZXRhaWwtcm93Ij4KICAgICAgICA8dGQ+MDQ6MDE6NDc8L3RkPgogICAgICAgIDx0ZD7kupTogqEt6auY5YWs5bGAPC90ZD4KICAgICAgICA8dGQ+MS40PC90ZD4KICAgICAgICA8dGQ+MS425YWDPC90ZD4KICAgICAgPC90cj4KICAgICAgPHRyIGNsYXNzPSJkZXRhaWwtcm93Ij4KICAgICAgICA8dGQ+MDU6MzA6MTI8L3RkPgogICAgICAgIDx0ZD7pq5jlhazlsYAt5Lit5ZKMPC90ZD4KICAgICAgICA8dGQ+NS42PC90ZD4KICAgICAgICA8dGQ+Ny445YWDPC90ZD4KICAgICAgPC90cj4KICAgICAgPHRyPgogICAgICAgIDx0ZCBjbGFzcz0iZGF0ZSB0b3RhbCI+57i96KiIPC90ZD4KICAgICAgICA8dGQ+PC90ZD4KICAgICAgICA8dGQ+Ny4wPC90ZD4KICAgICAgICA8dGQ+OS405YWDPC90ZD4KICAgICAgPC90cj4KICAgIDwvdGJvZHk+CiAgPC90YWJsZT4KPC9kaXY+CjwvYm9keT48L2h0bWw+"
+     ],
+     [
+      "__RequestVerificationToken",
+      "tok-synth-abc"
+     ]
+    ]
+   }
+  ],
+  "dateTimeMap": {
+   "2607200000000000001": [
+    "2026/07/20 12:30:45"
+   ],
+   "2607200000000000002": [
+    "2026/07/21 14:00:10"
+   ]
+  },
+  "pdf": [
+   37,
+   80,
+   68,
+   70,
+   45,
+   49,
+   46,
+   52,
+   10,
+   37,
+   115,
+   121,
+   110,
+   116,
+   104,
+   101,
+   116,
+   105,
+   99,
+   10
+  ]
+ },
+ "pdfContent": [
+  "<!DOCTYPE html><html lang=\"zh-TW\"><head><meta charset=\"utf-8\"><title>合成列印頁</title><link rel=\"stylesheet\" href=\"https://www.fetc.net.tw/Content/print.css\"></head><body><div class=\"logo\"><img src=\"https://www.fetc.net.tw/Content/images/logo.png\"><img src=\"//cdn.example.test/x.png\"><img src=\"https://other.example.test/y.png\"></div><table id=\"tblFeeList\"><tr class=\"detail-row\"><td>04:01:47</td><td>五股-高公局</td><td>1.4</td><td>1.6元</td></tr><tr><td class=\"date total\">總計</td><td></td><td>1.4</td><td>1.6元</td></tr></table></body></html>",
+  "<!DOCTYPE html><html lang=\"zh-TW\"><head>\n<meta charset=\"utf-8\">\n<title>合成測試 fixture — print</title>\n</head><body>\n<div id=\"printDetail\">\n  <table id=\"tblFeeList\" class=\"table\">\n    <thead>\n      <tr><th>時間</th><th>行車路線</th><th>里程</th><th>通行費</th></tr>\n    </thead>\n    <tbody>\n      <tr class=\"detail-row\">\n        <td>04:01:47</td>\n        <td>五股-高公局</td>\n        <td>1.4</td>\n        <td>1.6元</td>\n      </tr>\n      <tr class=\"detail-row\">\n        <td>05:30:12</td>\n        <td>高公局-中和</td>\n        <td>5.6</td>\n        <td>7.8元</td>\n      </tr>\n      <tr>\n        <td class=\"date total\">總計</td>\n        <td></td>\n        <td>7.0</td>\n        <td>9.4元</td>\n      </tr>\n    </tbody>\n  </table>\n</div>\n</body></html>",
+  "<!DOCTYPE html><html lang=\"zh-TW\"><head></head><body><div>沒有 head/body 的片段 <img src=\"https://www.fetc.net.tw/a.png\"></div></body></html>",
+  "<!DOCTYPE html><html lang=\"zh-TW\"><head></head><body></body></html>"
+ ]
+}

@@ -1,5 +1,5 @@
 // ── 遠通(FETC)通行明細 HTML 解析器(瀏覽器版,移植自 etag-relay/lib/parse.js)──────
-// 輸出逐欄等同中繼版(test/parity.test.js 以 etag-relay/fixtures 與 golden 鎖住)。
+// 輸出逐欄等同中繼 ≤0.7.1 版(test/parse-parity.test.js 以 golden/relay-parity.json 與 test/fixtures 鎖住)。
 // 差別只有 DOM 來源:中繼用 cheerio,這裡用參數 parseHtml(html) → Document
 //   瀏覽器:html => new DOMParser().parseFromString(html, 'text/html')
 //   Node 測試:linkedom 的 DOMParser

@@ -1,5 +1,6 @@
-# fetc-session-bridge 純函式模組(fetc-parse.js／fetc-chain.js)的 parity 測試。
-# 對照 etag-relay/lib/parse.js 與 fixtures,所以 relay 的解析器或 fixtures 一改也要跑。
+# fetc-session-bridge 的測試(純函式模組 fetc-parse.js／fetc-chain.js 的 parity 等)。
+# 0.8.0 起 etag-relay 已拆掉 lib/parse.js、lib/fetc-client.js、fixtures/:parity 改對擴充功能
+# 自己的 golden(test/golden/relay-parity.json)與 test/fixtures,不再依賴 etag-relay。
 name: test fetc-session-bridge
 
 on:
@@ -7,9 +8,6 @@ on:
     branches: [main]
     paths:
       - 'fetc-session-bridge/**'
-      - 'etag-relay/lib/parse.js'
-      - 'etag-relay/lib/fetc-client.js'
-      - 'etag-relay/fixtures/**'
       - '.github/workflows/test-session-bridge.yml'
   workflow_dispatch:
 
@@ -21,9 +19,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: install etag-relay deps(parity 要 require relay 的 parse.js)
-        working-directory: etag-relay
-        run: npm ci
       - name: install fetc-session-bridge deps
         working-directory: fetc-session-bridge
         run: npm ci

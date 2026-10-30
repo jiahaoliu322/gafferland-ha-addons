@@ -30,8 +30,8 @@ const core = GflAgentCore.createAgentCore({
 // 一次性清理舊鍵:2.0.x 的 cfTab(留給人點驗證的分頁)、lastClearance(上次自動過驗證紀錄);2.1.x 的 pdfPending(憑證待補旗標)
 chrome.runtime.onInstalled.addListener((details) => {
   chrome.storage.local.remove(['cfTab', 'lastClearance', 'pdfPending']);
-  // 升級時再清舊版殘留的錯誤字樣(舊版憑證被擋的錯誤訊息);全新安裝本來就沒有
-  if (details && details.reason === 'update') chrome.storage.local.remove(['lastError', 'pendingError']);
+  // 升級時再清舊版殘留:錯誤字樣(舊版憑證被擋的錯誤訊息)與上次執行(舊版字樣的 lastRun,2.3.0 起);全新安裝本來就沒有
+  if (details && details.reason === 'update') chrome.storage.local.remove(['lastError', 'pendingError', 'lastRun']);
 });
 chrome.runtime.onStartup.addListener(() => {
   chrome.storage.local.remove(['cfTab', 'lastClearance', 'pdfPending']);

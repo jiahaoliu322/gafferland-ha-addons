@@ -1,4 +1,5 @@
-# 在 GitHub Actions 上建置 etag-relay 映像並推到 ghcr.io。
+# 在 GitHub Actions 上建置 etag-relay(0.8.0 起 add-on 名稱為 Gafferland Relay)映像並推到 ghcr.io。
+# 映像名 etag-relay-amd64 刻意不改(config.yaml image: 指向它,改名＝HA 抓不到)。
 #
 # 為什麼要這樣做(2026-07-27):Home Assistant 主機上的 docker build 會**卡住不動**——
 # Supervisor 只印「Starting build」,之後既不報錯也不完成,連 job lock 都不放(導致
@@ -7,7 +8,7 @@
 #
 # config.yaml 的 `image:` 指向這裡推的映像,tag = config.yaml 的 version,
 # 所以**每次改 etag-relay/ 都要記得 bump version**,否則 HA 端不會抓到新映像。
-name: build etag-relay
+name: build etag-relay (Gafferland Relay)
 
 on:
   push:
@@ -27,8 +28,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 批K8(2026-08-23):build 前先跑測試——test-parse/test-inline 0.5.1 起已離線化
-      # (合成 fixtures+stub fetch),但 CI 上從未執行過;測試紅=不建映像不推 ghcr。
+      # 批K8(2026-08-23):build 前先跑測試;測試紅=不建映像不推 ghcr。
+      # 0.8.0:eTag 路由拆除後跑 test-sms／test-heartbeat／test-server(本機起 server、禁止對外連線),一律跟著 package.json 的 npm test。
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -37,7 +38,7 @@ jobs:
         run: npm ci
       - name: relay tests
         working-directory: etag-relay
-        run: node test-parse.js && node test-inline.js && node test-heartbeat.js && node test-sms.js && node test-cf.js
+        run: npm test
 
       # 版本號以 config.yaml 為單一事實來源,避免兩處各寫一份而對不上
       - id: meta

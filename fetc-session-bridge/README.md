@@ -1,6 +1,6 @@
 # Gafferland eTag Session — fetc-session-bridge
 
-Chrome 擴充功能(2.2.0)。裝在店裡(或自己)的電腦上,**在這台電腦已登入的遠通電收(fetc.net.tw)會員區裡**代為查詢通行明細,結果交回 Gafferland 站台計算金額。單一使用者的內部工具。
+Chrome 擴充功能(2.3.0)。裝在店裡(或自己)的電腦上,**在這台電腦已登入的遠通電收(fetc.net.tw)會員區裡**代為查詢通行明細,結果交回 Gafferland 站台計算金額。單一使用者的內部工具。
 
 運作方式:擴充功能只做**查詢與金額**;員工按「執行」才跑,平常不連遠通也不問站台。按下「執行」後問站台「有沒有工作」;沒有就什麼都不做;有就在背景開一個遠通分頁,把 `fetc-parse.js`＋`fetc-chain.js` 注入該分頁執行(請求由遠通網頁本身發出),結果 POST 回站台,佇列做完(站台回空)關掉分頁。擴充功能的背景頁自己只連 Gafferland 站台,不直接連遠通。
 
@@ -31,14 +31,11 @@ Chrome 擴充功能(2.2.0)。裝在店裡(或自己)的電腦上,**在這台電�
 - **這台已被移除**:/collect 把這台移除了;到設定頁重新配對。
 - 站台網址只允許 `admin.gafferland.com`(manifest `host_permissions`);設定頁填別的網址會被擋下並提示。
 
-## 舊中繼(備援)
+## 2.3.0 變更
 
-popup 下方「舊中繼(備援)」摺疊區保留 1.x 的兩個功能,只在站台仍使用 HA 中繼(`ETAG_MODE=relay`)時需要:
-
-- 「更新 Gafferland session」:把遠通 cookies(含 HttpOnly)送到站台,由站台轉給 HA 中繼。需先在同一個 Chrome 登入 Gafferland 後台。
-- 「複製 Cookie 字串」:貼到 `{站台}/collect` 的「貼 Cookie 補救」欄位。
-
-疑難排解(舊中繼):403 → 先登入 Gafferland 後台再重試;session 無效 → 重新登入遠通會員區。
+- popup 拿掉「舊中繼(備援)」摺疊區(「更新 Gafferland session」「複製 Cookie 字串」)——HA 中繼 0.8.0(Gafferland Relay)已拆遠通 eTag 路由,這兩個鈕已無作用;權限一併拿掉只為「複製 Cookie 字串」存在的 `clipboardWrite`。
+- 升級時(`onInstalled` reason=update)再清一次上次執行紀錄 `lastRun`,popup 不殘留舊版字樣(與 2.2.0 起的 `lastError`／`pendingError` 一起清)。
+- 內部:`lastRun.trigger` 只收 `popup`(拿掉 2.1.x 下載觸發的死值 `download`)。
 
 ## 開發
 
@@ -48,7 +45,7 @@ cd fetc-session-bridge && npm ci && npm test
 
 - `agent-core.js`:「執行」一輪的分頁／回報流程與 peek(可注入依賴,測試用假 chrome.*)
 - `background.js`:只接 runtime 訊息(popup「執行」／peek)與舊鍵清理
-- `fetc-parse.js`、`fetc-chain.js`:遠通查詢鏈(瀏覽器純模組,由 etag-relay 移植,parity 測試鎖住)
+- `fetc-parse.js`、`fetc-chain.js`:遠通查詢鏈(瀏覽器純模組,由 etag-relay ≤0.7.1 移植)。parity 測試對 `test/golden/relay-parity.json`(中繼拆除前用 relay 對同一組輸入產生的輸出;輸入在 `test/helpers/parity-inputs.js`、合成 HTML 在 `test/fixtures/`),不再依賴 `etag-relay/`
 - 零密鑰、零真實車牌／帳號(本 repo 公開);測試資料全為合成
 
 ## 註記

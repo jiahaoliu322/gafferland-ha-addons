@@ -1,11 +1,12 @@
-# etag-relay — HA add-on
+# Gafferland Relay(原 etag-relay)— HA add-on
+#
+# 0.8.0:拆遠通 eTag 路由(/query /print /session、keep-alive、lib/fetc-client.js、lib/parse.js),
+# 只剩 /sms 簡訊轉送與店內 IP 心跳;零 npm 依賴(cheerio 移除)。映像名不變。
 #
 # ⚠ 0.3.2 起改用 node:20-bookworm-slim,**不再用 mcr.microsoft.com/playwright 官方映像**
 # (playwright 官方映像太肥,曾讓 GitHub Actions build+push 卡死;見舊版 changelog)。
 #
-# 0.5.0:登入/VNC/Chrome 全套拆除——session 更新改由使用者電腦的 Chrome 擴充功能把
-# cookies POST 進 /session(見 server.js handleSession),查詢/結算原本就是純 HTTP
-# (見 lib/fetc-client.js),中繼本體完全不需要瀏覽器/虛擬螢幕/VNC,映像大瘦身。
+# 0.5.0:登入/VNC/Chrome 全套拆除,中繼本體完全不需要瀏覽器/虛擬螢幕/VNC,映像大瘦身。
 #
 # 0.5.1:base image 改釘 digest(供應鏈完整性——tag 可被上游重新指向,digest 不可變)。
 # 更新法(本機無 docker CLI,用 registry API 查 manifest list digest;buildx 會依平台
@@ -23,11 +24,12 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-# 只裝 production 依賴(cheerio 解析)。npm ci 要求 package-lock.json 存在且與
-# package.json 完全同步,不同步/缺 lock 直接 fail-fast(比 npm install 更適合 CI/映像建置)。
+# 只裝 production 依賴(0.8.0 起為零個;保留 npm ci 讓日後加依賴時 lock 不同步仍 fail-fast)。
+# npm ci 要求 package-lock.json 存在且與 package.json 完全同步,不同步/缺 lock 直接 fail-fast。
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 
+# lib/ 整個 COPY(0.8.0 起只剩 sms-forward.js、siteip-heartbeat.js)
 COPY server.js ./
 COPY lib ./lib
 

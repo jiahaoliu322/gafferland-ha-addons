@@ -1,5 +1,17 @@
-name: "eTag Relay v3"
-version: "0.7.1"
+name: "Gafferland Relay"
+version: "0.8.0"
+# 0.8.0(改名 Gafferland Relay,拆遠通 eTag 舊路):遠通 eTag 改由員工電腦的瀏覽器擴充功能代查、
+# 收款憑證由員工在網站匯入遠通原生 PDF,中繼的 eTag 路由全數拆除——/query、/print、/session、
+# keep-alive、session 存檔(session.json)、cin 快取、/session 成功回呼 Vercel(notifyVercel)、
+# lib/fetc-client.js、lib/parse.js、fixtures/、test-parse/test-inline/test-cf;package.json 移除
+# cheerio(零 npm 依賴)。/health 拿掉 sessionValid/sessionReason/lastKeepAlive,保留
+# siteIpHeartbeat。**POST /sms 簡訊轉送、店內 IP 心跳、X-Relay-Secret 驗證行為零改動**;
+# 心跳仍沿用 VERCEL_CAPTCHA_URL(取 origin)與 VERCEL_CALLBACK_SECRET。slug/image 不變
+# (改了 HA 會當成另一個 add-on、映像也要重建另一個 repo)。options 拿掉 FETC_ACCOUNT/
+# FETC_PASSWORD;schema 兩者改選填(使用者既有設定還有這兩鍵,直接刪 schema 會讓 Supervisor
+# 驗證不過;更新後可從設定頁清空,下版再清 schema)。
+# 啟動時刪除舊遠通 session 檔(/data/session.json,不存在略過、刪不掉只 warn);新增 test-server.js
+# (本機起 server 驗 /health、/sms、心跳、eTag 路由 404,no-egress 擋所有對外連線)。
 # 0.7.1:分辨遠通 Cloudflare 挑戰(reason cf-challenge／health sessionReason),/sms 與心跳零改動。
 # 遠通 www.fetc.net.tw 對非真實瀏覽器回 Managed Challenge(403+cf-mitigated: challenge),
 # 舊版把挑戰頁當會員頁解析成「session 失效」,使用者白重貼 cookie;現在 rawFetch 偵測到即
@@ -119,25 +131,25 @@ slug: "etag_relay_v3"
 # {arch} 由 Supervisor 代換(本 add-on 只支援 amd64),tag 取自上方 version——
 # **改 etag-relay/ 內容一定要同時 bump version**,否則 HA 抓不到新映像。
 image: "ghcr.io/jiahaoliu322/etag-relay-{arch}"
-description: "遠通(FETC)eTag 通行明細中繼服務,供 Gafferland Vercel cron-etag 呼叫(台灣住宅 IP 出口)"
+description: "Gafferland 簡訊轉送（every8d）與店內對外 IP 心跳中繼（台灣住宅 IP 出口）"
 arch:
   - amd64
 init: false
 ports:
   8099/tcp: 8099
 ports_description:
-  8099/tcp: "etag-relay HTTP API(建議只透過 Cloudflare Tunnel 對外,不直接開防火牆)"
+  8099/tcp: "Gafferland Relay HTTP API(簡訊轉送 /sms 與 /health;建議只透過 Cloudflare Tunnel 對外,不直接開防火牆)"
 map:
   - data:rw
 options:
-  FETC_ACCOUNT: ""
-  FETC_PASSWORD: ""
   RELAY_SECRET: ""
   VERCEL_CAPTCHA_URL: ""
   VERCEL_CALLBACK_SECRET: ""
 schema:
-  FETC_ACCOUNT: str
-  FETC_PASSWORD: password
+  # ↓ 0.8.0 已停用(遠通 eTag 路由拆除,程式不再讀取),但使用者既有設定還有這兩鍵——直接從
+  # schema 刪除會讓 Supervisor 驗證不過、更新後起不來;改選填,等使用者清空欄位後下版再移除。
+  FETC_ACCOUNT: str?
+  FETC_PASSWORD: password?
   RELAY_SECRET: password
   VERCEL_CAPTCHA_URL: str
   VERCEL_CALLBACK_SECRET: password

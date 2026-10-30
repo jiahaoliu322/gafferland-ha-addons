@@ -292,8 +292,8 @@ test('⑥Member 是驗證頁:留分頁、cfTab 鍵不存在、下一輪開新分
   assertOnlyMemberNav(t);
 });
 
-test('trigger:run({trigger}) 記進 lastRun.trigger;不在清單內／未給＝沒有 trigger', async () => {
-  for (const [given, want] of [['download', 'download'], ['popup', 'popup'], ['evil', undefined], [undefined, undefined]]) {
+test('trigger:run({trigger}) 記進 lastRun.trigger;不在清單內／未給＝沒有 trigger(2.3.0 起舊值 download 也不收)', async () => {
+  for (const [given, want] of [['download', undefined], ['popup', 'popup'], ['evil', undefined], [undefined, undefined]]) {
     const t = build({ agent: AGENT }, { poll: seqPoll([[]]), result: resultOk });
     await t.core.run(given === undefined ? undefined : { trigger: given });
     assert.equal(lastRun(t).trigger, want, String(given));

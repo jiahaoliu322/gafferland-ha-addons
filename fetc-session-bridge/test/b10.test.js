@@ -188,10 +188,10 @@ test('b10③:設定頁「解除配對」(真的跑 options.js)清 lastError／pe
 
 // ── ④manifest／原始碼無 downloads ─────────────────────────────────────────────
 
-test('b10④:manifest 2.2.0、權限無 downloads、description 新字面;background／agent-core 無 downloads 字面', () => {
+test('b10④:manifest 2.3.0、權限無 downloads、description 新字面;background／agent-core 無 downloads 字面', () => {
   const m = JSON.parse(read('manifest.json'));
-  assert.equal(m.version, '2.2.0');
-  assert.deepEqual(m.permissions, ['clipboardWrite', 'cookies', 'scripting', 'storage', 'tabs']);
+  assert.equal(m.version, '2.3.0');
+  assert.deepEqual(m.permissions, ['cookies', 'scripting', 'storage', 'tabs']);
   assert.match(m.description, /由員工按「執行」時在這台電腦已登入的遠通分頁內代為查詢通行明細，交回 Gafferland 站台計算金額（平常不自動連線；收款憑證請在網站匯入遠通 PDF）。$/);
   assert.ok(!/產生收款憑證/.test(m.description));
   for (const f of ['background.js', 'agent-core.js', 'manifest.json']) assert.ok(!/downloads/.test(read(f)), `${f} 出現 downloads`);

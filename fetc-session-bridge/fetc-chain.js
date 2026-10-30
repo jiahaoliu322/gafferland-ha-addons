@@ -1,9 +1,10 @@
-// ── 遠通(FETC)查詢鏈(瀏覽器版,移植自 etag-relay/lib/fetc-client.js)──────────────
+// ── 遠通(FETC)查詢鏈(瀏覽器版,移植自 etag-relay ≤0.7.1 的 lib/fetc-client.js)────────
 // 在遠通分頁(同源、自帶 session cookie)內執行的純模組:不碰 chrome.*、不碰 storage、
 // 不 require 任何套件。fetch 與 DOM 解析一律由呼叫端注入:
 //   createFetcChain({ fetchImpl, parseHtml, base, now, parser, cinCache })
 // 請求的路徑／方法／表單欄位／__RequestVerificationToken、X-Requested-With、Content-Type 與
-// 中繼版完全相同(test/request-parity.test.js 鎖住);不送 User-Agent／Cookie／Referer
+// 中繼 ≤0.7.1 版完全相同(test/request-parity.test.js 以 test/golden/relay-parity.json 鎖住;
+// 中繼 0.8.0 已拆掉 fetc-client.js,golden 是拆除前由中繼產生的);不送 User-Agent／Cookie／Referer
 // (瀏覽器自帶,在遠通頁面內執行時 Referer 自然是遠通網址)。fetch 一律 credentials:'include'。
 //
 // PDF 鐵則:收款憑證必須是遠通伺服器生成的原生 PDF(UX000006GetPDF);送進列印端點的

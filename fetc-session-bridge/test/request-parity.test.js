@@ -1,25 +1,21 @@
 'use strict';
-// 請求 parity:同一組輸入,relay fetc-client.js(stub globalThis.fetch)與 fetc-chain.js
-// (注入 fetchImpl)送出的請求逐筆相等(扣掉瀏覽器自帶的 UA/Cookie/Referer);
-// buildPdfContentFromPrintHtml 兩邊逐字相等;golden 比對不依賴 relay。
+// 請求 parity:同一組輸入,fetc-chain.js(注入 fetchImpl)送出的請求逐筆等於 relay fetc-client.js
+// 當年送出的(扣掉瀏覽器自帶的 UA/Cookie/Referer);buildPdfContentFromPrintHtml 逐字相等。
+// 中繼 0.8.0 拆掉 lib/fetc-client.js 後,relay 那一側改對 golden/relay-parity.json
+// (拆除前用 relay 對 helpers/parity-inputs.js 同一組輸入、同一個 stub 站台跑出的請求紀錄與輸出)。
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const H = require('./helpers/env');
+const { encode } = require('./helpers/canon');
+const I = require('./helpers/parity-inputs');
 
 const { createFetcChain, buildPdfContentFromPrintHtml, utf8ToBase64 } = require('../fetc-chain');
 const parser = require('../fetc-parse');
 
-let rc = null;
-try {
-  rc = require(path.join(H.RELAY_DIR, 'lib', 'fetc-client'));
-} catch (e) {
-  rc = null;
-}
-const relayOpts = { skip: rc ? false : 'etag-relay/lib/fetc-client.js 不存在' };
-
-const WINDOW = { startDate: '2026/07/20', endDate: '2026/07/21' };
+const RELAY = JSON.parse(fs.readFileSync(path.join(H.GOLDEN_DIR, 'relay-parity.json'), 'utf8'));
+const WINDOW = I.WINDOW;
 
 function newChain(site, log, extra = {}) {
   return createFetcChain({
@@ -31,29 +27,14 @@ function newChain(site, log, extra = {}) {
   });
 }
 
-async function withRelayFetch(site, log, fn) {
-  const orig = globalThis.fetch;
-  globalThis.fetch = H.makeStubFetch(site, log);
-  try {
-    return await fn(new rc.CookieJar());
-  } finally {
-    globalThis.fetch = orig;
-  }
-}
-
-test('請求 parity: queryPlate(GET /Member → /Member/Setting → search → 逐批 detail)', relayOpts, async () => {
-  const rLog = [];
-  const rRes = await withRelayFetch(H.makeSite(), rLog, async (jar) => {
-    const cin = await rc.resolveCin(jar, H.TEST_PLATE);
-    return rc.queryAll(jar, { plate: H.TEST_PLATE, cin, ...WINDOW }, { skipPrint: true });
-  });
+test('請求 parity: queryPlate(GET /Member → /Member/Setting → search → 逐批 detail)', async () => {
   const cLog = [];
   const cRes = await newChain(H.makeSite(), cLog).queryPlate({ plate: H.TEST_PLATE, ...WINDOW });
 
-  assert.equal(rLog.length, 5); // member, setting, search, detail×2
-  assert.deepStrictEqual(cLog.map(H.normalize), rLog.map(H.normalize));
-  assert.deepStrictEqual(cRes.transactions, rRes.transactions);
-  assert.equal(cRes.total, rRes.total);
+  assert.equal(RELAY.queryPlate.log.length, 5); // member, setting, search, detail×2
+  assert.deepStrictEqual(encode(cLog.map(H.normalize)), RELAY.queryPlate.log);
+  assert.deepStrictEqual(encode(cRes.transactions), RELAY.queryPlate.transactions);
+  assert.deepStrictEqual(encode(cRes.total), RELAY.queryPlate.total);
   assert.equal(cRes.transactions.length, 6);
 
   // search 表單:weekend 重複鍵確實在、順序一致
@@ -64,16 +45,8 @@ test('請求 parity: queryPlate(GET /Member → /Member/Setting → search → �
   assert.equal(search.headers['x-requested-with'], 'XMLHttpRequest');
 });
 
-test('請求 parity: buildDateTimeMapForTimes + print + generateNativePdf', relayOpts, async () => {
-  const times = ['2026/07/20 12:30:45', '2026/07/21 14:00:10', '2026/07/20 03:00:00'];
-  const rLog = [];
-  const rOut = await withRelayFetch(H.makeSite(), rLog, async (jar) => {
-    const cin = await rc.resolveCin(jar, H.TEST_PLATE);
-    const { dateTimeMap, fieldToken } = await rc.buildDateTimeMapForTimes(jar, { plate: H.TEST_PLATE, cin, ...WINDOW, times });
-    const printHtml = await rc.print(jar, fieldToken, { plate: H.TEST_PLATE, cin, dateTimeMap });
-    const pdf = await rc.generateNativePdf(jar, fieldToken, printHtml);
-    return { dateTimeMap, pdf };
-  });
+test('請求 parity: buildDateTimeMapForTimes + print + generateNativePdf', async () => {
+  const times = I.PRINT_TIMES;
   const cLog = [];
   const chain = newChain(H.makeSite(), cLog);
   const cin = await chain.getCin(H.TEST_PLATE);
@@ -81,9 +54,9 @@ test('請求 parity: buildDateTimeMapForTimes + print + generateNativePdf', rela
   const printHtml = await chain.print(fieldToken, { plate: H.TEST_PLATE, cin, dateTimeMap });
   const pdf = await chain.generateNativePdf(fieldToken, printHtml);
 
-  assert.deepStrictEqual(dateTimeMap, rOut.dateTimeMap);
-  assert.deepStrictEqual(Array.from(pdf), Array.from(rOut.pdf));
-  assert.deepStrictEqual(cLog.map(H.normalize), rLog.map(H.normalize));
+  assert.deepStrictEqual(encode(dateTimeMap), RELAY.printChain.dateTimeMap);
+  assert.deepStrictEqual(Array.from(pdf), RELAY.printChain.pdf);
+  assert.deepStrictEqual(encode(cLog.map(H.normalize)), RELAY.printChain.log);
   // 最後一筆是 GetPDF:路徑含 ?&r=(已正規化)、Content-Type 一致
   const last = H.normalize(cLog[cLog.length - 1]);
   assert.equal(last.path, '/UX0000Common/UX000006GetPDF?&r=N');
@@ -112,22 +85,20 @@ test('瀏覽器守門: 不送 User-Agent/Cookie/Referer,credentials=include,redi
     assert.equal(e.redirect, 'follow');
     assert.ok(e.url.startsWith(H.BASE + '/'));
   }
-  if (rc) {
-    const rLog = [];
-    await withRelayFetch(H.makeSite(), rLog, async (jar) => { await rc.resolveCin(jar, H.TEST_PLATE); });
-    assert.ok('user-agent' in rLog[0].headers); // 確認 normalize 扣的東西真的存在於 relay 側
-  }
+  // normalize 扣掉的 UA／Cookie／Referer 只是瀏覽器自帶的差異:有帶就被扣、其他鍵原樣保留
+  const n = H.normalize({ method: 'GET', pathQuery: '/x?r=123', headers: { 'user-agent': 'u', cookie: 'c', referer: 'r', 'x-keep': 'k' }, body: null });
+  assert.deepStrictEqual(n, { method: 'GET', path: '/x?r=N', headers: { 'x-keep': 'k' }, body: null });
 });
 
-test('buildPdfContentFromPrintHtml: 與 relay 逐字相等(經 GetPDF body 的 content 還原)', relayOpts, async () => {
-  for (const html of [H.RICH_PRINT_HTML, H.fixture('print.html'), '<div>沒有 head/body 的片段 <img src="/a.png"></div>', '']) {
-    const rLog = [];
-    await withRelayFetch(H.makeSite(), rLog, (jar) => rc.generateNativePdf(jar, 'tok', html));
-    const relayContent = Buffer.from(new URLSearchParams(rLog[0].body).get('content'), 'base64').toString('utf8');
+test('buildPdfContentFromPrintHtml: 與 relay 逐字相等(golden=relay 當年 GetPDF body 的 content 還原)', async () => {
+  const inputs = I.pdfContentInputs(H);
+  assert.equal(RELAY.pdfContent.length, inputs.length);
+  inputs.forEach((html, j) => {
+    const relayContent = RELAY.pdfContent[j];
     assert.equal(buildPdfContentFromPrintHtml(html), relayContent);
     const chain = newChain(H.makeSite(), []);
     assert.equal(chain.buildPdfContentFromPrintHtml(html), relayContent);
-  }
+  });
 });
 
 test('golden: buildPdfContentFromPrintHtml(RICH) 等於 relay 當年輸出(不依賴 relay)', () => {

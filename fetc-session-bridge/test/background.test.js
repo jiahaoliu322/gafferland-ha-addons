@@ -75,15 +75,15 @@ test('b10:onInstalled／onStartup:清舊鍵 cfTab＋lastClearance＋pdfPending,�
   }
 });
 
-test('b10f F2:onInstalled 升級(reason=update)再清 lastError／pendingError;全新安裝不動它們;onStartup 不清這兩鍵', async () => {
+test('b10f F2→2.3.0:onInstalled 升級(reason=update)再清 lastError／pendingError／lastRun;全新安裝不動它們;onStartup 不清這三鍵', async () => {
   const keep = { lastError: { at: 1, message: 'cf-challenge step=getpdf status=403' }, pendingError: 'cf-challenge step=getpdf status=403', lastRun: { at: 1 } };
   {
     const b = loadBackground({ agent: AGENT });
     await b.local.set({ ...keep, cfTab: { tabId: 1, windowId: null }, pdfPending: true });
     b.chrome.runtime.onInstalled.fire({ reason: 'update', previousVersion: '2.1.0' });
     await flush();
-    for (const k of ['lastError', 'pendingError', 'cfTab', 'pdfPending']) assert.equal(b.local.m.has(k), false, `update:${k}`);
-    assert.ok(b.local.m.has('lastRun') && b.local.m.has('agent'), 'update:其他鍵不動');
+    for (const k of ['lastError', 'pendingError', 'lastRun', 'cfTab', 'pdfPending']) assert.equal(b.local.m.has(k), false, `update:${k}`);
+    assert.ok(b.local.m.has('agent'), 'update:其他鍵不動');
   }
   for (const [label, fire] of [['install', (b) => b.chrome.runtime.onInstalled.fire({ reason: 'install' })], ['onStartup', (b) => b.chrome.runtime.onStartup.fire({})], ['onInstalled 無 details', (b) => b.chrome.runtime.onInstalled.fire()]]) {
     const b = loadBackground({ agent: AGENT });
